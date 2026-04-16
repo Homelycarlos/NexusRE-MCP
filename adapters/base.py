@@ -15,11 +15,21 @@ class BaseAdapter(abc.ABC):
     # ── Decompilation & Function Listing ──────────────────────────────────
 
     @abc.abstractmethod
-    async def list_functions(self) -> List[FunctionSchema]:
+    async def list_functions(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[FunctionSchema]:
         pass
 
     @abc.abstractmethod
     async def get_function(self, address: str) -> Optional[FunctionSchema]:
+        pass
+
+    @abc.abstractmethod
+    async def get_current_address(self) -> Optional[str]:
+        """Get the user's currently selected address in the UI."""
+        pass
+
+    @abc.abstractmethod
+    async def get_current_function(self) -> Optional[str]:
+        """Get the user's currently selected function in the UI."""
         pass
 
     @abc.abstractmethod
@@ -48,26 +58,26 @@ class BaseAdapter(abc.ABC):
     # ── Data & Strings ────────────────────────────────────────────────────
 
     @abc.abstractmethod
-    async def get_strings(self) -> List[StringSchema]:
+    async def get_strings(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[StringSchema]:
         pass
 
     @abc.abstractmethod
-    async def get_globals(self) -> List[GlobalVarSchema]:
+    async def get_globals(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[GlobalVarSchema]:
         """Get global data items from the binary."""
         pass
 
     @abc.abstractmethod
-    async def get_segments(self) -> List[SegmentSchema]:
+    async def get_segments(self, offset: int = 0, limit: int = 100) -> List[SegmentSchema]:
         """Get memory segments."""
         pass
 
     @abc.abstractmethod
-    async def get_imports(self) -> List[ImportSchema]:
+    async def get_imports(self, offset: int = 0, limit: int = 100) -> List[ImportSchema]:
         """Get imported symbols."""
         pass
 
     @abc.abstractmethod
-    async def get_exports(self) -> List[ExportSchema]:
+    async def get_exports(self, offset: int = 0, limit: int = 100) -> List[ExportSchema]:
         """Get exported symbols."""
         pass
 
@@ -85,4 +95,14 @@ class BaseAdapter(abc.ABC):
     @abc.abstractmethod
     async def set_function_type(self, address: str, signature: str) -> bool:
         """Apply a C function prototype to the function at address."""
+        pass
+
+    @abc.abstractmethod
+    async def rename_local_variable(self, address: str, old_name: str, new_name: str) -> bool:
+        """Rename a local variable within a function."""
+        pass
+
+    @abc.abstractmethod
+    async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool:
+        """Set the type of a local variable within a function."""
         pass

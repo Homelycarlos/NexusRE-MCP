@@ -55,16 +55,27 @@ class IdaOperations:
         return hex(ea) if ea != idaapi.BADADDR else None
 
     @staticmethod
-    def get_functions():
+    def get_current_function():
+        ea = idaapi.get_screen_ea()
+        func = idaapi.get_func(ea)
+        return hex(func.start_ea) if func else None
+
+    @staticmethod
+    def get_functions(offset=0, limit=100, filter_str=None):
         funcs = []
         for sea in idautils.Functions():
+            name = idc.get_func_name(sea)
+            if filter_str and filter_str.lower() not in name.lower():
+                continue
             func = idaapi.get_func(sea)
             funcs.append({
-                "name": idc.get_func_name(sea),
+                "name": name,
                 "address": hex(sea),
                 "size": func.size() if func else 0
             })
-        return funcs
+        if limit <= 0:
+            return funcs[offset:]
+        return funcs[offset:offset+limit]
 
     @staticmethod
     def get_function(address):
@@ -151,47 +162,92 @@ class IdaOperations:
         result = idc.SetType(addr, signature)
         return bool(result)
 
+    @staticmethod
+    def rename_local_variable(address, old_name, new_name):
+        addr = int(address, 16)
+        try:
+            import ida_hexrays
+            f = idaapi.get_func(addr)
+            if not f:
+                return False
+            cfunc = ida_hexrays.decompile(f)
+            if not cfunc:
+                return False
+            for loc in cfunc.get_lvars():
+                if loc.name == old_name:
+                    return ida_hexrays.rename_lvar(addr, old_name, new_name)
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def set_local_variable_type(address, variable_name, new_type):
+        addr = int(address, 16)
+        try:
+            import ida_hexrays
+            import ida_typeinf
+            f = idaapi.get_func(addr)
+            if not f:
+                return False
+            tinfo = ida_typeinf.tinfo_t()
+            ida_typeinf.parse_decl(tinfo, None, f"{new_type} {variable_name};", 0)
+            cfunc = ida_hexrays.decompile(f)
+            if not cfunc:
+                return False
+            return ida_hexrays.set_lvar_type(addr, variable_name, tinfo)
+        except Exception:
+            return False
+
     # ── Data Extraction ───────────────────────────────────────────────────
 
     @staticmethod
-    def get_strings():
+    def get_strings(offset=0, limit=100, filter_str=None):
         strings = []
         sc = idautils.Strings()
-        for s in sc:
+        for idx, s in enumerate(sc):
+            val = str(s)
+            if filter_str and filter_str.lower() not in val.lower():
+                continue
             strings.append({
                 "address": hex(s.ea),
-                "value": str(s)
+                "value": val
             })
-        return strings
+        if limit <= 0:
+            return strings[offset:]
+        return strings[offset:offset+limit]
 
     @staticmethod
-    def get_globals():
+    def get_globals(offset=0, limit=100, filter_str=None):
         globals_list = []
         for seg_ea in idautils.Segments():
             seg = ida_segment.getseg(seg_ea)
             if not seg:
                 continue
             seg_name = ida_segment.get_segm_name(seg)
-            # Only look at data segments
             if seg_name in [".data", ".rdata", ".bss", "DATA", ".rodata"]:
                 ea = seg.start_ea
                 while ea < seg.end_ea:
                     name = idc.get_name(ea)
                     if name and not name.startswith("unk_"):
-                        size = idc.get_item_size(ea)
-                        globals_list.append({
-                            "address": hex(ea),
-                            "name": name,
-                            "size": size,
-                            "value": None
-                        })
+                        if filter_str and filter_str.lower() not in name.lower():
+                            pass
+                        else:
+                            size = idc.get_item_size(ea)
+                            globals_list.append({
+                                "address": hex(ea),
+                                "name": name,
+                                "size": size,
+                                "value": None
+                            })
                     ea = idc.next_head(ea, seg.end_ea)
                     if ea == idaapi.BADADDR:
                         break
-        return globals_list
+        if limit <= 0:
+            return globals_list[offset:]
+        return globals_list[offset:offset+limit]
 
     @staticmethod
-    def get_segments():
+    def get_segments(offset=0, limit=100):
         segments = []
         for seg_ea in idautils.Segments():
             seg = ida_segment.getseg(seg_ea)
@@ -213,10 +269,12 @@ class IdaOperations:
                 "size": seg.size(),
                 "permissions": perms
             })
-        return segments
+        if limit <= 0:
+            return segments[offset:]
+        return segments[offset:offset+limit]
 
     @staticmethod
-    def get_imports():
+    def get_imports(offset=0, limit=100):
         imports = []
         nimps = ida_nalt.get_import_module_qty()
         for i in range(nimps):
@@ -230,10 +288,12 @@ class IdaOperations:
                     })
                 return True
             ida_nalt.enum_import_names(i, imp_cb)
-        return imports
+        if limit <= 0:
+            return imports[offset:]
+        return imports[offset:offset+limit]
 
     @staticmethod
-    def get_exports():
+    def get_exports(offset=0, limit=100):
         exports = []
         for i in range(ida_entry.get_entry_qty()):
             ordinal = ida_entry.get_entry_ordinal(i)
@@ -244,7 +304,9 @@ class IdaOperations:
                     "address": hex(ea),
                     "name": name
                 })
-        return exports
+        if limit <= 0:
+            return exports[offset:]
+        return exports[offset:offset+limit]
 
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
@@ -268,8 +330,10 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"status": "ok"}
             elif action == "get_current_address":
                 result = {"address": IdaOperations._execute_sync(IdaOperations.get_current_address)}
+            elif action == "get_current_function":
+                result = {"address": IdaOperations._execute_sync(IdaOperations.get_current_function)}
             elif action == "get_functions":
-                result = {"functions": IdaOperations._execute_sync(IdaOperations.get_functions)}
+                result = {"functions": IdaOperations._execute_sync(IdaOperations.get_functions, args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "get_function":
                 result = IdaOperations._execute_sync(IdaOperations.get_function, args.get("address"))
                 if result is None:
@@ -292,18 +356,23 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"success": IdaOperations._execute_sync_write(IdaOperations.set_comment, args.get("address"), args.get("comment"), args.get("repeatable", False))}
             elif action == "set_function_type":
                 result = {"success": IdaOperations._execute_sync_write(IdaOperations.set_function_type, args.get("address"), args.get("signature"))}
+            elif action == "rename_local_variable":
+                result = {"success": IdaOperations._execute_sync_write(IdaOperations.rename_local_variable, args.get("address"), args.get("old_name"), args.get("new_name"))}
+            elif action == "set_local_variable_type":
+                result = {"success": IdaOperations._execute_sync_write(IdaOperations.set_local_variable_type, args.get("address"), args.get("variable_name"), args.get("new_type"))}
+
 
             # ── Data Extraction ────────────────────────────────────────
             elif action == "get_strings":
-                result = {"strings": IdaOperations._execute_sync(IdaOperations.get_strings)}
+                result = {"strings": IdaOperations._execute_sync(IdaOperations.get_strings, args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "get_globals":
-                result = {"globals": IdaOperations._execute_sync(IdaOperations.get_globals)}
+                result = {"globals": IdaOperations._execute_sync(IdaOperations.get_globals, args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "get_segments":
-                result = {"segments": IdaOperations._execute_sync(IdaOperations.get_segments)}
+                result = {"segments": IdaOperations._execute_sync(IdaOperations.get_segments, args.get("offset", 0), args.get("limit", 100))}
             elif action == "get_imports":
-                result = {"imports": IdaOperations._execute_sync(IdaOperations.get_imports)}
+                result = {"imports": IdaOperations._execute_sync(IdaOperations.get_imports, args.get("offset", 0), args.get("limit", 100))}
             elif action == "get_exports":
-                result = {"exports": IdaOperations._execute_sync(IdaOperations.get_exports)}
+                result = {"exports": IdaOperations._execute_sync(IdaOperations.get_exports, args.get("offset", 0), args.get("limit", 100))}
             elif action == "analyze_functions":
                 # Re-analyze specified addresses
                 result = {"success": True}

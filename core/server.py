@@ -65,11 +65,31 @@ async def get_function(session_id: str, address: str) -> Any:
         return handle_error(e)
 
 @mcp.tool()
-async def list_functions(session_id: str) -> Any:
-    """List all functions in the current binary."""
+async def get_current_address(session_id: str) -> Any:
+    """Get the user's currently selected address in the UI."""
     try:
         adapter = get_adapter(session_id)
-        funcs = await adapter.list_functions()
+        addr = await adapter.get_current_address()
+        return {"address": addr}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def get_current_function(session_id: str) -> Any:
+    """Get the user's currently selected function in the UI."""
+    try:
+        adapter = get_adapter(session_id)
+        addr = await adapter.get_current_function()
+        return {"address": addr}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def list_functions(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
+    """List all functions in the current binary with pagination."""
+    try:
+        adapter = get_adapter(session_id)
+        funcs = await adapter.list_functions(offset, limit, filter_str)
         return [f.model_dump() for f in funcs]
     except Exception as e:
         return handle_error(e)
@@ -133,51 +153,51 @@ async def get_xrefs(session_id: str, address: str) -> Any:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-async def get_strings(session_id: str) -> Any:
-    """Extract all defined strings from the binary."""
+async def get_strings(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
+    """Extract all defined strings from the binary with pagination."""
     try:
         adapter = get_adapter(session_id)
-        strings = await adapter.get_strings()
+        strings = await adapter.get_strings(offset, limit, filter_str)
         return [s.model_dump() for s in strings]
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
-async def get_globals(session_id: str) -> Any:
-    """Get global data items (named data labels) from the binary."""
+async def get_globals(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
+    """Get global data items (named data labels) from the binary with pagination."""
     try:
         adapter = get_adapter(session_id)
-        globals_list = await adapter.get_globals()
+        globals_list = await adapter.get_globals(offset, limit, filter_str)
         return [g.model_dump() for g in globals_list]
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
-async def get_segments(session_id: str) -> Any:
-    """Get all memory segments (.text, .data, .rdata, etc.) from the binary."""
+async def get_segments(session_id: str, offset: int = 0, limit: int = 100) -> Any:
+    """Get all memory segments (.text, .data, .rdata, etc.) from the binary with pagination."""
     try:
         adapter = get_adapter(session_id)
-        segs = await adapter.get_segments()
+        segs = await adapter.get_segments(offset, limit)
         return [s.model_dump() for s in segs]
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
-async def get_imports(session_id: str) -> Any:
-    """Get all imported symbols (DLL imports, external references)."""
+async def get_imports(session_id: str, offset: int = 0, limit: int = 100) -> Any:
+    """Get all imported symbols (DLL imports, external references) with pagination."""
     try:
         adapter = get_adapter(session_id)
-        imports = await adapter.get_imports()
+        imports = await adapter.get_imports(offset, limit)
         return [i.model_dump() for i in imports]
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
-async def get_exports(session_id: str) -> Any:
-    """Get all exported symbols from the binary."""
+async def get_exports(session_id: str, offset: int = 0, limit: int = 100) -> Any:
+    """Get all exported symbols from the binary with pagination."""
     try:
         adapter = get_adapter(session_id)
-        exports = await adapter.get_exports()
+        exports = await adapter.get_exports(offset, limit)
         return [e.model_dump() for e in exports]
     except Exception as e:
         return handle_error(e)
@@ -212,6 +232,26 @@ async def set_function_type(session_id: str, address: str, signature: str) -> An
     try:
         adapter = get_adapter(session_id)
         success = await adapter.set_function_type(address, signature)
+        return {"success": success}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def rename_local_variable(session_id: str, address: str, old_name: str, new_name: str) -> Any:
+    """Rename a local variable within a function's decompiled pseudocode."""
+    try:
+        adapter = get_adapter(session_id)
+        success = await adapter.rename_local_variable(address, old_name, new_name)
+        return {"success": success}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def set_local_variable_type(session_id: str, address: str, variable_name: str, new_type: str) -> Any:
+    """Set the type of a local variable within a function. Example: new_type="char *" """
+    try:
+        adapter = get_adapter(session_id)
+        success = await adapter.set_local_variable_type(address, variable_name, new_type)
         return {"success": success}
     except Exception as e:
         return handle_error(e)

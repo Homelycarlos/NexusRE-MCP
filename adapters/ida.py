@@ -26,8 +26,8 @@ class IDAAdapter(BaseAdapter):
 
     # ── Decompilation & Function Listing ──────────────────────────────────
 
-    async def list_functions(self) -> List[FunctionSchema]:
-        res = await self._call("get_functions")
+    async def list_functions(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[FunctionSchema]:
+        res = await self._call("get_functions", {"offset": offset, "limit": limit, "filter": filter_str})
         return [
             FunctionSchema(
                 name=f.get('name', ''),
@@ -51,6 +51,14 @@ class IDAAdapter(BaseAdapter):
             decompiled=None,
             xrefs=[]
         )
+
+    async def get_current_address(self) -> Optional[str]:
+        res = await self._call("get_current_address")
+        return res.get("address") if res else None
+
+    async def get_current_function(self) -> Optional[str]:
+        res = await self._call("get_current_function")
+        return res.get("address") if res else None
 
     async def decompile_function(self, address: str) -> Optional[str]:
         res = await self._call("decompile", {"address": address})
@@ -105,24 +113,24 @@ class IDAAdapter(BaseAdapter):
 
     # ── Data & Strings ────────────────────────────────────────────────────
 
-    async def get_strings(self) -> List[StringSchema]:
-        res = await self._call("get_strings")
+    async def get_strings(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[StringSchema]:
+        res = await self._call("get_strings", {"offset": offset, "limit": limit, "filter": filter_str})
         return [StringSchema(**s) for s in res.get("strings", [])]
 
-    async def get_globals(self) -> List[GlobalVarSchema]:
-        res = await self._call("get_globals")
+    async def get_globals(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[GlobalVarSchema]:
+        res = await self._call("get_globals", {"offset": offset, "limit": limit, "filter": filter_str})
         return [GlobalVarSchema(**g) for g in res.get("globals", [])]
 
-    async def get_segments(self) -> List[SegmentSchema]:
-        res = await self._call("get_segments")
+    async def get_segments(self, offset: int = 0, limit: int = 100) -> List[SegmentSchema]:
+        res = await self._call("get_segments", {"offset": offset, "limit": limit})
         return [SegmentSchema(**s) for s in res.get("segments", [])]
 
-    async def get_imports(self) -> List[ImportSchema]:
-        res = await self._call("get_imports")
+    async def get_imports(self, offset: int = 0, limit: int = 100) -> List[ImportSchema]:
+        res = await self._call("get_imports", {"offset": offset, "limit": limit})
         return [ImportSchema(**i) for i in res.get("imports", [])]
 
-    async def get_exports(self) -> List[ExportSchema]:
-        res = await self._call("get_exports")
+    async def get_exports(self, offset: int = 0, limit: int = 100) -> List[ExportSchema]:
+        res = await self._call("get_exports", {"offset": offset, "limit": limit})
         return [ExportSchema(**e) for e in res.get("exports", [])]
 
     # ── Modification ──────────────────────────────────────────────────────
@@ -137,4 +145,12 @@ class IDAAdapter(BaseAdapter):
 
     async def set_function_type(self, address: str, signature: str) -> bool:
         res = await self._call("set_function_type", {"address": address, "signature": signature})
+        return res.get("success", False)
+
+    async def rename_local_variable(self, address: str, old_name: str, new_name: str) -> bool:
+        res = await self._call("rename_local_variable", {"address": address, "old_name": old_name, "new_name": new_name})
+        return res.get("success", False)
+
+    async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool:
+        res = await self._call("set_local_variable_type", {"address": address, "variable_name": variable_name, "new_type": new_type})
         return res.get("success", False)
