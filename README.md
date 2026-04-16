@@ -23,40 +23,36 @@ This project was built to address the boilerplate and state-leaking issues of ol
 
 ---
 
-## 🛠️ Prerequisites
+## Prerequisites
 
 - [Python](https://www.python.org/downloads/) (**3.11 or higher**)
-  - *Use `idapyswitch` to bind IDA to your newest Python version if necessary.*
-- [uv](https://docs.astral.sh/uv/) (highly recommended for automatic, sandboxed dependency execution)
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9.x recommended). *Note: IDA Free is not supported as it lacks IDAPython.*
-- Ghidra *(If using the Ghidra backend)*
-
-### Supported MCP Clients
-Because this framework implements the strict MCP JSON-RPC standard, it inherently works with all major AI coding assistants including:
-
-* Amazon Q Developer CLI
-* Augment Code
-* Claude & Claude Code
-* Cline
-* Codex
-* Copilot CLI
-* Crush
-* Cursor
-* Gemini CLI
-* Kilo Code
-* Kiro
-* LM Studio
-* Opencode
-* Qodo Gen
-* Qwen Coder
-* Roo Code
-* Trae
-* VS Code & VS Code Insiders
-* Warp
-* Windsurf
-* Zed
-
-**Any MCP Client:** Run `uv run main.py --config` to generate the correct JSON configuration for your specific client!
+  - Use `idapyswitch` to switch to the newest Python version
+- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
+- Supported MCP Client (pick one you like)
+  - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
+  - [Augment Code](https://www.augmentcode.com/)
+  - [Claude](https://claude.ai/download)
+  - [Claude Code](https://www.anthropic.com/code)
+  - [Cline](https://cline.bot)
+  - [Codex](https://github.com/openai/codex)
+  - [Copilot CLI](https://docs.github.com/en/copilot)
+  - [Crush](https://github.com/charmbracelet/crush)
+  - [Cursor](https://cursor.com)
+  - [Gemini CLI](https://google-gemini.github.io/gemini-cli/)
+  - [Kilo Code](https://www.kilocode.com/)
+  - [Kiro](https://kiro.dev/)
+  - [LM Studio](https://lmstudio.ai/)
+  - [Opencode](https://opencode.ai/)
+  - [Qodo Gen](https://www.qodo.ai/)
+  - [Qwen Coder](https://qwenlm.github.io/qwen-code-docs/)
+  - [Roo Code](https://roocode.com)
+  - [Trae](https://trae.ai/)
+  - [VS Code](https://code.visualstudio.com/)
+  - [VS Code Insiders](https://code.visualstudio.com/insiders)
+  - [Warp](https://www.warp.dev/)
+  - [Windsurf](https://windsurf.com)
+  - [Zed](https://zed.dev/)
+  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `uv run main.py --config` to get the JSON config for your client.
 
 ---
 
