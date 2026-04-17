@@ -525,11 +525,12 @@ def disassemble_bytes(hex_bytes: str, arch: str = "x86", mode: str = "64", addre
         return handle_error(e)
 
 @mcp.tool()
-def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init_registers: dict = None) -> Any:
+def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init_registers: dict = None, trace: bool = False) -> Any:
     """Virtual Sandbox CPU using Unicorn Engine. Executes raw hex instructions and returns final register states. Useful for bypassing Encrypted Pointers!"""
     try:
-        from unicorn import Uc, UC_ARCH_X86, UC_ARCH_ARM, UC_MODE_32, UC_MODE_64, UC_MODE_ARM
+        from unicorn import Uc, UC_HOOK_CODE, UC_ARCH_X86, UC_ARCH_ARM, UC_MODE_32, UC_MODE_64, UC_MODE_ARM
         from unicorn.x86_const import UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_RSP
+        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
         
         arch_map = {"x86": UC_ARCH_X86, "arm": UC_ARCH_ARM}
         mode_map = {"32": UC_MODE_32, "64": UC_MODE_64, "arm": UC_MODE_ARM}
@@ -546,6 +547,28 @@ def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init
         # Initialize emulator in X86-64bit mode
         mu = Uc(uc_arch, uc_mode)
         
+        # Disassembler for tracing
+        md = Cs(CS_ARCH_X86, CS_MODE_64) if arch.lower() == "x86" and mode == "64" else None
+        
+        trace_log = []
+        
+        def hook_code(uc, address, size, user_data):
+            if md:
+                try:
+                    mem = uc.mem_read(address, size)
+                    for i in md.disasm(mem, address):
+                        log_entry = f"0x{address:x}: {i.mnemonic} {i.op_str}"
+                        # Optional: Log specific registers that changed, keeping it simple for the hook
+                        trace_log.append(log_entry)
+                        break # Only log the first instruction found at this address
+                except Exception:
+                    trace_log.append(f"0x{address:x}: <decompilation error>")
+            else:
+                 trace_log.append(f"0x{address:x}: <executed {size} bytes>")
+        
+        if trace:
+            mu.hook_add(UC_HOOK_CODE, hook_code)
+            
         # Structure Memory (2MB)
         mu.mem_map(ADDRESS, 2 * 1024 * 1024)
         mu.mem_write(ADDRESS, raw_bytes)
@@ -572,9 +595,14 @@ def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init
             "rcx": hex(mu.reg_read(UC_X86_REG_RCX)),
             "rdx": hex(mu.reg_read(UC_X86_REG_RDX)),
         }
-        return {"registers": out_registers}
+        
+        result = {"registers": out_registers}
+        if trace:
+            result["trace"] = trace_log
+            
+        return result
     except ImportError:
-        return handle_error(Exception("unicorn is not installed."))
+        return handle_error(Exception("unicorn or capstone is not installed."))
     except Exception as e:
         return handle_error(e)
 
