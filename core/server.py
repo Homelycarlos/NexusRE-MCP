@@ -177,6 +177,18 @@ async def get_xrefs(session_id: str, address: str) -> Any:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+async def scan_aob(session_id: str, pattern: str) -> Any:
+    """Scan raw byte patterns (e.g. '48 8B 0D ?? ?? ?? ??') in the target engine. Returns starting memory address."""
+    try:
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, "scan_aob"):
+             return handle_error(Exception("Active backend adapter does not support AOB scanning natively yet."))
+        result = await adapter.scan_aob(pattern)
+        return {"address": result}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
 async def get_strings(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
     """Extract all defined strings from the binary with pagination."""
     try:

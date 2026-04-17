@@ -221,6 +221,25 @@ class IdaOperations:
         except Exception:
             return False
 
+    @staticmethod
+    def scan_aob(pattern):
+        import ida_bytes
+        import idc
+        import ida_ida
+        
+        # IDA 9.0+ compliant address resolution
+        min_ea = ida_ida.inf_get_min_ea()
+        max_ea = ida_ida.inf_get_max_ea()
+        
+        cpat = ida_bytes.compiled_binpat_vec_t()
+        ida_bytes.parse_binpat_str(cpat, min_ea, pattern, 16)
+        ea = ida_bytes.bin_search(min_ea, max_ea, cpat, ida_bytes.BIN_SEARCH_FORWARD)
+        
+        if type(ea) is tuple:
+            ea = ea[0]
+            
+        return hex(ea) if ea != idc.BADADDR else None
+
     # ── Data Extraction ───────────────────────────────────────────────────
 
     @staticmethod
@@ -403,6 +422,8 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             elif action == "analyze_functions":
                 # Re-analyze specified addresses
                 result = {"success": True}
+            elif action == "scan_aob":
+                result = {"address": IdaOperations._execute_sync(IdaOperations.scan_aob, args.get("pattern"))}
             else:
                 self.send_response(404)
                 self.end_headers()

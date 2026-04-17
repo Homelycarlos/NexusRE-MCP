@@ -92,6 +92,10 @@ class IDAAdapter(BaseAdapter):
         res = await self._call("decompile", {"address": address})
         return res.get("code")
 
+    async def scan_aob(self, pattern: str) -> Optional[str]:
+        res = await self._call("scan_aob", {"pattern": pattern})
+        return res.get("address")
+
     async def disassemble_at(self, address: str) -> List[InstructionSchema]:
         res = await self._call("disassemble", {"address": address})
         raw = res.get("code", "")
