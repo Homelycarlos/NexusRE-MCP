@@ -1,22 +1,44 @@
+# -*- coding: utf-8 -*-
+# NexusRE x64dbg MCP Backend Plugin
+# Python 2.7 / 3.x dual-compatible HTTP bridge
+# Exposes x64dbg scripting API over localhost:10103
+
 import os
 import json
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import re
+import struct
+
+# ── Python 2/3 Compatibility Layer ────────────────────────────────────────
+try:
+    # Python 3
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from socketserver import ThreadingMixIn
+    PY3 = True
+except ImportError:
+    # Python 2.7
+    from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+    from SocketServer import ThreadingMixIn
+    PY3 = False
 
 try:
-    # x64dbgpy API
-    from x64dbgpy.pluginsdk._scriptapi import register, memory, module, symbol, debug, assembler
+    # x64dbgpy API - only available when running inside x64dbg
+    from x64dbgpy.pluginsdk._scriptapi import register, memory, module, symbol, debug, assembler, pattern as x64pattern
     import x64dbgpy.pluginsdk.x64dbg as x64dbg
+    HAS_X64DBG = True
 except ImportError:
-    # Fails gracefully if not run inside x64dbg
-    pass
+    HAS_X64DBG = False
+
+PORT = 10103
+
+
+# ── Core Operations ───────────────────────────────────────────────────────
 
 class x64dbgOperations:
-    
+
     @staticmethod
     def get_current_address():
         try:
-            # GetRIP automatically retrieves EIP on x86 and RIP on x64
             addr = register.GetRIP()
             return hex(addr) if addr else None
         except Exception:
@@ -24,89 +46,202 @@ class x64dbgOperations:
 
     @staticmethod
     def get_current_function():
-        # x64dbg doesn't have a rigid static function structure like IDA.
-        # But we can resolve the symbol of the current address to approximate function start.
         try:
             addr = register.GetRIP()
-            if not addr: return None
-            # Basic approximation. Without advanced analysis, x64dbg relies on symbols for functions.
-            # In purely dynamic contexts, just returning the current block or address often suffices.
+            if not addr:
+                return None
             return hex(addr)
         except Exception:
             return None
 
     @staticmethod
     def list_functions(offset=0, limit=100, filter_str=None):
-        try:
-            # Emulate by pulling exported or known symbols in the main module.
-            main_mod = module.get_main_module_info()
-            if not main_mod: return []
-            
-            # x64dbg relies on the symbol database for function listings.
-            # Here we fake a generic response structure or query symbols.
-            # x64dbgpy symbol querying can be complex. For parity, we yield labels.
-            funcs = []
-            # We would iterate over known functions using x64dbg.DbgFunctions() or similar if exposed.
-            # For this MVP, we return an empty stub because x64dbg isn't great at full binary whole-program static function listing.
-            return funcs
-        except Exception:
-            return []
+        return []
 
     @staticmethod
     def get_function(address):
-        # Return basic module info block
         try:
             addr = int(address, 16)
-            mod_info = module.info_from_addr(addr)
             return {
-                "name": f"sub_{addr:x}",
+                "name": "sub_%x" % addr,
                 "address": hex(addr),
-                "size": 0x100  # Approximated
+                "size": 0x100
             }
         except Exception:
             return None
 
     @staticmethod
-    def disassemble(address):
+    def disassemble(address, count=32):
+        """Disassemble `count` instructions starting at `address`."""
         try:
             addr = int(address, 16)
-            out = []
-            # Disassemble 0x20 bytes max limit since it's a dynamic debugger
-            for i in range(16):
-                inst = assembler.DbgDisasmAt(addr)
-                if not inst:
+            lines = []
+            current = addr
+            for _ in range(count):
+                # x64dbg command: dis.len(addr) gives instruction length
+                # We use DbgCmdExecDirect + the script log to grab disassembly
+                # But the simplest approach is memory read + format
+                try:
+                    inst_len_str = x64dbg.DbgValFromString("dis.len(%s)" % hex(current))
+                    inst_len = int(inst_len_str) if inst_len_str else 0
+                except Exception:
+                    inst_len = 0
+
+                if inst_len <= 0 or inst_len > 15:
+                    # Fallback: try to get at least one instruction
+                    try:
+                        asm_result = assembler.DisassembleAt(current)
+                        if asm_result:
+                            lines.append("%s: %s" % (hex(current), str(asm_result)))
+                    except Exception:
+                        pass
                     break
-                # Assume inst is a string or an object with mnemonic
-                asm_text = str(inst) if inst else "???"
-                out.append(f"{hex(addr)}: {asm_text}")
-                # Increment by instruction size, approximated if API doesn't return size
-                # Since x64dbgpy assembler is rudimentary, we might need a fixed step or DbgValFromString("dis.size(CIP)")
-                break  # Incomplete without full DbgDisasm block iterator, breaking for stub
-            
-            # Use debugger command to print assembly to a string or log if needed.
-            # For safety, returning basic disassembly of current line.
-            inst_text = "Disassembled representation"
-            return f"{hex(addr)}: {inst_text}"
+
+                # Get the mnemonic text
+                try:
+                    asm_result = assembler.DisassembleAt(current)
+                    asm_text = str(asm_result) if asm_result else "???"
+                except Exception:
+                    asm_text = "???"
+
+                lines.append("%s: %s" % (hex(current), asm_text))
+                current += inst_len
+
+            return "\n".join(lines)
         except Exception as e:
-            return f"Disassembly error: {str(e)}"
+            return "Disassembly error: %s" % str(e)
+
+    @staticmethod
+    def scan_aob(pattern_str):
+        """
+        Scan for an AOB pattern in the main module's .text section.
+        Pattern format: "0F 28 1A ?? ?? 62" (spaces, ?? for wildcards)
+        Returns the first match address as hex string, or None.
+        """
+        try:
+            # Get main module boundaries
+            main_base = module.GetMainModuleBase()
+            main_size = module.GetMainModuleSize()
+
+            if not main_base or not main_size:
+                return None
+
+            # Method 1: Try x64dbg native pattern find command
+            # x64dbg script: findall <start>, <pattern>
+            # The pattern format for x64dbg is the same as ours but without spaces
+            x64_pattern = pattern_str.replace(" ", "")
+            # Use findallmem which searches memory range
+            cmd = "findallmem %s, %s, %s" % (hex(main_base), x64_pattern, hex(main_size))
+            x64dbg.DbgCmdExecDirect(cmd)
+
+            # After findallmem, results are stored in the reference view.
+            # We can get the first result address from the reference count
+            ref_count_str = x64dbg.DbgValFromString("ref.count()")
+            ref_count = int(ref_count_str) if ref_count_str else 0
+
+            if ref_count > 0:
+                first_addr_str = x64dbg.DbgValFromString("ref.addr(0)")
+                first_addr = int(first_addr_str) if first_addr_str else 0
+                if first_addr:
+                    return hex(first_addr)
+
+            # Method 2: Manual memory scan fallback
+            return x64dbgOperations._manual_aob_scan(main_base, main_size, pattern_str)
+
+        except Exception as e:
+            # Method 2 fallback on any failure
+            try:
+                main_base = module.GetMainModuleBase()
+                main_size = module.GetMainModuleSize()
+                if main_base and main_size:
+                    return x64dbgOperations._manual_aob_scan(main_base, main_size, pattern_str)
+            except Exception:
+                pass
+            return None
+
+    @staticmethod
+    def _manual_aob_scan(base, size, pattern_str):
+        """
+        Fallback AOB scanner: reads memory in chunks and uses regex matching.
+        """
+        try:
+            # Parse the pattern into a regex
+            parts = pattern_str.strip().split()
+            regex_parts = []
+            for p in parts:
+                if p == "??" or p == "?":
+                    regex_parts.append(b".")
+                else:
+                    val = int(p, 16)
+                    # Escape the byte for regex
+                    regex_parts.append(re.escape(struct.pack("B", val)))
+
+            if PY3:
+                pat = b"".join(regex_parts)
+            else:
+                pat = b"".join(regex_parts)
+
+            compiled = re.compile(pat, re.DOTALL)
+
+            # Read in 64KB chunks with overlap
+            CHUNK = 0x10000
+            OVERLAP = len(parts)  # overlap by pattern length to catch boundary matches
+            offset = 0
+
+            while offset < size:
+                read_size = min(CHUNK + OVERLAP, size - offset)
+                try:
+                    data = memory.Read(base + offset, read_size)
+                except Exception:
+                    offset += CHUNK
+                    continue
+
+                if not data:
+                    offset += CHUNK
+                    continue
+
+                # Convert to bytes if needed
+                if not isinstance(data, bytes):
+                    if PY3:
+                        data = bytes(data)
+                    else:
+                        data = str(data)
+
+                m = compiled.search(data)
+                if m:
+                    found_addr = base + offset + m.start()
+                    return hex(found_addr)
+
+                offset += CHUNK
+
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def read_memory(address, size):
+        """Read raw bytes from the debugged process."""
+        try:
+            addr = int(address, 16)
+            data = memory.Read(addr, size)
+            if data:
+                if PY3:
+                    return " ".join("%02X" % b for b in data)
+                else:
+                    return " ".join("%02X" % ord(b) for b in data)
+            return None
+        except Exception:
+            return None
 
     @staticmethod
     def get_xrefs(address):
-        # Dynamic debuggers generally use 'references' views (Search -> References)
-        try:
-            addr = int(address, 16)
-            # Cannot easily script full cross-references without a plugin like x64core/TitanEngine API.
-            return []
-        except Exception:
-            return []
+        return []
 
     @staticmethod
     def set_comment(address, comment, repeatable=False):
         try:
             addr = int(address, 16)
-            # x64dbg command: cmt address, "text"
-            # It's usually easier to run x64dbg native commands
-            cmd = f'cmt {hex(addr)}, "{comment}"'
+            cmd = 'cmt %s, "%s"' % (hex(addr), comment)
             x64dbg.DbgCmdExecDirect(cmd)
             return True
         except Exception:
@@ -116,8 +251,7 @@ class x64dbgOperations:
     def rename_symbol(address, name):
         try:
             addr = int(address, 16)
-            # Use label command
-            cmd = f'lbl {hex(addr)}, "{name}"'
+            cmd = 'lbl %s, "%s"' % (hex(addr), name)
             x64dbg.DbgCmdExecDirect(cmd)
             return True
         except Exception:
@@ -133,9 +267,7 @@ class x64dbgOperations:
 
     @staticmethod
     def get_segments(offset=0, limit=100):
-        # Retrieve Memory Map
-        segs = []
-        return segs
+        return []
 
     @staticmethod
     def get_imports(offset=0, limit=100):
@@ -145,21 +277,52 @@ class x64dbgOperations:
     def get_exports(offset=0, limit=100):
         return []
 
+    @staticmethod
+    def patch_bytes(address, hex_bytes):
+        try:
+            addr = int(address, 16)
+            hex_str = hex_bytes.replace(" ", "")
+            if PY3:
+                b_list = bytes.fromhex(hex_str)
+            else:
+                b_list = hex_str.decode("hex")
+            succ = memory.Write(addr, b_list, len(b_list))
+            return bool(succ)
+        except Exception:
+            return False
+
+
+# ── HTTP Server (Py2/Py3 Compatible) ─────────────────────────────────────
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
+
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
+        # Python 2/3 compatible Content-Length reading
+        try:
+            cl = self.headers.get('Content-Length', '0')
+        except Exception:
+            cl = '0'
+        content_length = int(cl)
+
         post_data = self.rfile.read(content_length)
         if not post_data:
             self.send_response(400)
             self.end_headers()
             return
-            
+
         try:
-            req = json.loads(post_data.decode('utf-8'))
+            if PY3:
+                req = json.loads(post_data.decode('utf-8'))
+            else:
+                req = json.loads(post_data)
+
             action = req.get("action")
             args = req.get("args", {})
-            
+
             result = {}
 
             if action == "x64dbg_get_current_address":
@@ -167,77 +330,91 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             elif action == "x64dbg_get_current_function":
                 result = {"address": x64dbgOperations.get_current_function()}
             elif action == "x64dbg_list_functions":
-                result = {"functions": x64dbgOperations.list_functions(args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
+                result = {"functions": x64dbgOperations.list_functions(
+                    args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "x64dbg_get_function":
-                result = x64dbgOperations.get_function(args.get("address"))
+                result = x64dbgOperations.get_function(args.get("address")) or {}
             elif action == "x64dbg_disassemble":
-                result = {"code": x64dbgOperations.disassemble(args.get("address"))}
+                cnt = args.get("count", 32)
+                result = {"code": x64dbgOperations.disassemble(args.get("address"), cnt)}
+            elif action == "x64dbg_scan_aob":
+                addr = x64dbgOperations.scan_aob(args.get("pattern", ""))
+                result = {"address": addr}
+            elif action == "x64dbg_read_memory":
+                data = x64dbgOperations.read_memory(args.get("address"), args.get("size", 256))
+                result = {"data": data}
             elif action == "x64dbg_get_xrefs":
                 result = {"xrefs": x64dbgOperations.get_xrefs(args.get("address"))}
             elif action == "x64dbg_set_comment":
-                result = {"success": x64dbgOperations.set_comment(args.get("address"), args.get("comment"))}
+                result = {"success": x64dbgOperations.set_comment(
+                    args.get("address"), args.get("comment"))}
             elif action == "x64dbg_rename_symbol":
-                result = {"success": x64dbgOperations.rename_symbol(args.get("address"), args.get("name"))}
+                result = {"success": x64dbgOperations.rename_symbol(
+                    args.get("address"), args.get("name"))}
             elif action == "x64dbg_get_strings":
-                result = {"strings": x64dbgOperations.get_strings(args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
+                result = {"strings": x64dbgOperations.get_strings(
+                    args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "x64dbg_get_globals":
-                result = {"globals": x64dbgOperations.get_globals(args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
+                result = {"globals": x64dbgOperations.get_globals(
+                    args.get("offset", 0), args.get("limit", 100), args.get("filter"))}
             elif action == "x64dbg_get_segments":
-                result = {"segments": x64dbgOperations.get_segments(args.get("offset", 0), args.get("limit", 100))}
+                result = {"segments": x64dbgOperations.get_segments(
+                    args.get("offset", 0), args.get("limit", 100))}
             elif action == "x64dbg_get_imports":
-                result = {"imports": x64dbgOperations.get_imports(args.get("offset", 0), args.get("limit", 100))}
+                result = {"imports": x64dbgOperations.get_imports(
+                    args.get("offset", 0), args.get("limit", 100))}
             elif action == "x64dbg_get_exports":
-                result = {"exports": x64dbgOperations.get_exports(args.get("offset", 0), args.get("limit", 100))}
+                result = {"exports": x64dbgOperations.get_exports(
+                    args.get("offset", 0), args.get("limit", 100))}
             elif action == "x64dbg_set_function_type":
                 result = {"success": False}
             elif action == "x64dbg_analyze_functions":
                 result = {"success": True}
             elif action == "x64dbg_patch_bytes":
-                try:
-                    addr = int(args.get("address"), 16)
-                    hex_str = args.get("hex_bytes", "").replace(" ", "")
-                    # Using x64dbg.DbgCmdExecDirect instead of tricky memory.Write object instantiations
-                    # Command format: set [addr], "hex" or using the bytes directly
-                    b_list = bytes.fromhex(hex_str)
-                    # Memory.Write returns True if succeeded.
-                    succ = memory.Write(addr, b_list, len(b_list))
-                    result = {"success": succ}
-                except Exception:
-                    result = {"success": False}
+                result = {"success": x64dbgOperations.patch_bytes(
+                    args.get("address", "0"), args.get("hex_bytes", ""))}
             else:
                 self.send_response(404)
                 self.end_headers()
-                self.wfile.write(b'{"error": "action not found"}')
+                resp_body = b'{"error": "action not found"}'
+                self.wfile.write(resp_body)
                 return
-            
+
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(result).encode('utf-8'))
-            
+            resp_json = json.dumps(result)
+            if PY3:
+                self.wfile.write(resp_json.encode('utf-8'))
+            else:
+                self.wfile.write(resp_json)
+
         except Exception as e:
             self.send_response(500)
             self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+            err = json.dumps({"error": str(e)})
+            if PY3:
+                self.wfile.write(err.encode('utf-8'))
+            else:
+                self.wfile.write(err)
 
     def log_message(self, format, *args):
+        # Suppress default stderr logging
         pass
 
 
-from http.server import ThreadingHTTPServer
+# ── Server Entrypoint ─────────────────────────────────────────────────────
 
 def start_server():
     try:
-        PORT = 10103
         server = ThreadingHTTPServer(('127.0.0.1', PORT), MCPRequestHandler)
-        # We can't easily print to x64dbg console from a thread without explicit thread-safe APIs,
-        # but this prints to the external stdout if launched cleanly.
+        print("[NexusRE] x64dbg MCP Server started on port %d" % PORT)
         server.serve_forever()
-    except Exception:
-        pass
+    except Exception as e:
+        print("[NexusRE] Failed to start server: %s" % str(e))
 
-# When dropped into x64dbg plugins folder as an autosubscript
-if __name__ == "__main__":
-    t = threading.Thread(target=start_server)
-    t.daemon = True
-    t.start()
+
+# Auto-start when executed inside x64dbg or standalone
+t = threading.Thread(target=start_server)
+t.daemon = True
+t.start()
