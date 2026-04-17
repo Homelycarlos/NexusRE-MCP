@@ -66,7 +66,6 @@ class FridaAdapter(BaseAdapter):
     async def get_function(self, address: str) -> Optional[FunctionSchema]: return None
     async def decompile_function(self, address: str) -> Optional[str]: return None
     async def disassemble_at(self, address: str) -> List[InstructionSchema]: return []
-    async def batch_decompile(self, addresses: List[str]) -> List[str]: return []
     async def analyze_functions(self, addresses: List[str]) -> bool: return False
     async def get_xrefs(self, address: str) -> List[XrefSchema]: return []
     async def get_strings(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[StringSchema]: return []

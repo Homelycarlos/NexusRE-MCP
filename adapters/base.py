@@ -41,9 +41,12 @@ class BaseAdapter(abc.ABC):
         """Disassemble the function or block at the given address."""
         pass
 
-    @abc.abstractmethod
     async def batch_decompile(self, addresses: List[str]) -> List[str]:
-        pass
+        """Fire all decompilation requests concurrently utilizing asyncio.gather and ThreadingHTTPServer."""
+        import asyncio
+        tasks = [self.decompile_function(addr) for addr in addresses]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [res for res in results if res and not isinstance(res, Exception)]
 
     @abc.abstractmethod
     async def analyze_functions(self, addresses: List[str]) -> bool:

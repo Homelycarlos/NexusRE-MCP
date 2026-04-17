@@ -90,12 +90,6 @@ class Radare2Adapter(BaseAdapter):
             ))
         return instructions
 
-    async def batch_decompile(self, addresses: List[str]) -> List[str]:
-        results = []
-        for a in addresses:
-            results.append(await self.decompile_function(a) or "")
-        return results
-
     async def analyze_functions(self, addresses: List[str]) -> bool:
         for a in addresses:
             self.r2.cmd(f'af @ {a}')

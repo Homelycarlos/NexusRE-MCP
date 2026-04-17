@@ -109,10 +109,6 @@ class BinjaAdapter(BaseAdapter):
                 ))
         return instructions
 
-    async def batch_decompile(self, addresses: List[str]) -> List[str]:
-        res = await self._call("binja_batch_decompile", {"addresses": addresses})
-        return res.get("results", [])
-
     async def analyze_functions(self, addresses: List[str]) -> bool:
         res = await self._call("binja_analyze_functions", {"addresses": addresses})
         return res.get("success", False)

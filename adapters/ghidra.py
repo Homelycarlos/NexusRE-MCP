@@ -107,14 +107,6 @@ class GhidraAdapter(BaseAdapter):
                 ))
         return instructions
 
-    async def batch_decompile(self, addresses: List[str]) -> List[str]:
-        out = []
-        for addr in addresses:
-            code = await self.decompile_function(addr)
-            if code:
-                out.append(code)
-        return out
-
     async def analyze_functions(self, addresses: List[str]) -> bool:
         res = await self._call("ghidra_analyze_functions", {"addresses": addresses})
         return res.get("success", False)

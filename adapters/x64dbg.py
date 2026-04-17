@@ -110,9 +110,6 @@ class X64DbgAdapter(BaseAdapter):
                 ))
         return instructions
 
-    async def batch_decompile(self, addresses: List[str]) -> List[str]:
-        raise NotImplementedError("Batch Decompilation is not supported natively by x64dbg dynamic debugger.")
-
     async def analyze_functions(self, addresses: List[str]) -> bool:
         res = await self._call("x64dbg_analyze_functions", {"addresses": addresses})
         return res.get("success", False)
