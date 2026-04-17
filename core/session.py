@@ -1,24 +1,43 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
+SUPPORTED_BACKENDS = [
+    "ida", "ghidra", "x64dbg", "binja", "radare2",
+    "frida", "cheatengine", "gdb", "kernel", "dma"
+]
+
+DEFAULT_PORTS = {
+    "ida": 10101,
+    "ghidra": 10102,
+    "x64dbg": 10103,
+    "binja": 10104,
+    "cheatengine": 10105,
+}
+
 class SessionState(BaseModel):
-    backend: str  # "ida" or "ghidra"
+    backend: str
     binary_path: str
     architecture: str
-    backend_url: str = "http://127.0.0.1:10101" # Default connection url for the backend adapter
+    backend_url: str = "http://127.0.0.1:10101"
 
 class SessionManager:
     """
-    STRICT stateless session manager.
-    Zero global state leakage. Everything is scoped to session_id.
+    Session manager with default-session support.
+    If only one session exists, it is used automatically when no session_id is provided.
     """
     def __init__(self):
         self._sessions: Dict[str, SessionState] = {}
+        self._default_session: Optional[str] = None
 
-    def create_session(self, session_id: str, backend: str, binary_path: str, architecture: str, backend_url: str = "http://127.0.0.1:10101") -> SessionState:
-        if backend not in ["ida", "ghidra"]:
-            raise ValueError(f"Unsupported backend {backend}")
-            
+    def create_session(self, session_id: str, backend: str, binary_path: str, architecture: str, backend_url: str = "") -> SessionState:
+        if backend not in SUPPORTED_BACKENDS:
+            raise ValueError(f"Unsupported backend '{backend}'. Must be one of: {', '.join(SUPPORTED_BACKENDS)}")
+
+        # Auto-resolve backend URL from default port map if not provided
+        if not backend_url:
+            port = DEFAULT_PORTS.get(backend, 10101)
+            backend_url = f"http://127.0.0.1:{port}"
+
         state = SessionState(
             backend=backend,
             binary_path=binary_path,
@@ -26,13 +45,57 @@ class SessionManager:
             backend_url=backend_url
         )
         self._sessions[session_id] = state
+
+        # Auto-set as default if it's the only session
+        if len(self._sessions) == 1:
+            self._default_session = session_id
+
         return state
 
-    def get_session(self, session_id: str) -> Optional[SessionState]:
+    def get_session(self, session_id: Optional[str] = None) -> Optional[SessionState]:
+        # If no session_id given, try default
+        if not session_id or session_id == "auto":
+            if self._default_session:
+                return self._sessions.get(self._default_session)
+            # If only one session exists, use it
+            if len(self._sessions) == 1:
+                return next(iter(self._sessions.values()))
+            return None
         return self._sessions.get(session_id)
+
+    def resolve_session_id(self, session_id: Optional[str] = None) -> Optional[str]:
+        """Resolve 'auto' or None to the actual session ID."""
+        if not session_id or session_id == "auto":
+            if self._default_session:
+                return self._default_session
+            if len(self._sessions) == 1:
+                return next(iter(self._sessions.keys()))
+            return None
+        return session_id
+
+    def set_default(self, session_id: str) -> bool:
+        if session_id in self._sessions:
+            self._default_session = session_id
+            return True
+        return False
+
+    def list_sessions(self) -> List[dict]:
+        result = []
+        for sid, state in self._sessions.items():
+            result.append({
+                "session_id": sid,
+                "backend": state.backend,
+                "binary_path": state.binary_path,
+                "architecture": state.architecture,
+                "backend_url": state.backend_url,
+                "is_default": sid == self._default_session
+            })
+        return result
 
     def delete_session(self, session_id: str) -> bool:
         if session_id in self._sessions:
             del self._sessions[session_id]
+            if self._default_session == session_id:
+                self._default_session = None
             return True
         return False

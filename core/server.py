@@ -61,16 +61,47 @@ def handle_error(e: Exception) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def init_session(session_id: str, backend: str, binary_path: str, architecture: str, backend_url: str = "http://127.0.0.1:10101") -> str:
+def init_session(session_id: str, backend: str, binary_path: str, architecture: str = "x86_64", backend_url: str = "") -> str:
     """
     Initialize a new NexusRE session.
-    backend must be 'ida' or 'ghidra'.
+    Supported backends: ida, ghidra, x64dbg, binja, radare2, frida, cheatengine, gdb, kernel, dma.
+    If backend_url is empty, the default port for the backend is used automatically.
     """
     try:
         session_manager.create_session(session_id, backend, binary_path, architecture, backend_url)
         return f"Session {session_id} successfully created."
     except Exception as e:
         return json.dumps(handle_error(e))
+
+@mcp.tool()
+def list_sessions() -> Any:
+    """List all active NexusRE sessions and which is the default."""
+    return {"sessions": session_manager.list_sessions()}
+
+@mcp.tool()
+def set_default_session(session_id: str) -> Any:
+    """Set a session as the default so you don't have to pass session_id every time."""
+    success = session_manager.set_default(session_id)
+    if success:
+        return {"success": True, "message": f"{session_id} is now the default session."}
+    return {"success": False, "message": f"Session {session_id} not found."}
+
+@mcp.tool()
+def check_backends() -> Any:
+    """Ping all known backend ports (10101-10105) and report which are alive."""
+    import socket
+    ports = {"ida": 10101, "ghidra": 10102, "x64dbg": 10103, "binja": 10104, "cheatengine": 10105}
+    results = {}
+    for name, port in ports.items():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1)
+            s.connect(("127.0.0.1", port))
+            s.close()
+            results[name] = {"port": port, "status": "ALIVE"}
+        except Exception:
+            results[name] = {"port": port, "status": "DEAD"}
+    return {"backends": results}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Decompilation & Function Listing
@@ -178,13 +209,25 @@ async def get_xrefs(session_id: str, address: str) -> Any:
 
 @mcp.tool()
 async def scan_aob(session_id: str, pattern: str) -> Any:
-    """Scan raw byte patterns (e.g. '48 8B 0D ?? ?? ?? ??') in the target engine. Returns starting memory address."""
+    """Scan raw byte patterns (e.g. '48 8B 0D ?? ?? ?? ??') in the target engine. Works with IDA, CE, and x64dbg backends."""
     try:
         adapter = get_adapter(session_id)
         if not hasattr(adapter, "scan_aob"):
              return handle_error(Exception("Active backend adapter does not support AOB scanning natively yet."))
         result = await adapter.scan_aob(pattern)
-        return {"address": result}
+        return {"address": result} if result else {"error": "Pattern not found."}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def read_memory(session_id: str, address: str, size: int = 256) -> Any:
+    """Read raw bytes from the target process memory. Returns hex string."""
+    try:
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, "read_memory"):
+            return handle_error(Exception("Active backend does not support raw memory reads."))
+        result = await adapter.read_memory(address, size)
+        return {"data": result}
     except Exception as e:
         return handle_error(e)
 
@@ -357,17 +400,7 @@ async def instrument_execution(session_id: str, javascript_code: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-@mcp.tool()
-async def scan_aob(session_id: str, pattern: str) -> Any:
-    """[Cheat Engine Only] Scan memory for an AOB pattern (e.g. '48 8b 05 ?? ?? ?? ??')."""
-    try:
-        adapter = get_adapter(session_id)
-        res = await getattr(adapter, 'scan_aob')(pattern)
-        return {"address": res} if res else {"error": "Pattern not found."}
-    except AttributeError:
-        return handle_error(Exception("The selected backend does not support raw AOB scanning."))
-    except Exception as e:
-        return handle_error(e)
+# NOTE: scan_aob is now unified above (line ~180). CE, IDA, and x64dbg all route through the same tool.
 
 @mcp.tool()
 async def read_pointer_chain(session_id: str, base_address: str, offsets: List[str]) -> Any:
@@ -720,3 +753,111 @@ def hook_network_packets(filter_string: str = "udp.DstPort == 1119", timeout_ms:
 def spawn_esp_overlay() -> Any:
     """[ImGui/GLFW] Instantiates a TopMost, Transparent overlay window. Requires an external rendering loop."""
     return {"message": "Dynamic Python ImGui Overlay pipeline requires dedicated Thread execution. Use run_command to trigger 'python overlay_script.py'."}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Signature Database (Persistent AOB Pattern Storage)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def save_signatures(game: str, signatures: list) -> Any:
+    """
+    Store AOB signatures to the brain DB for a specific game.
+    Each signature: {"name": "...", "pattern": "48 8B ...", "offset": 3, "extra": 1, "category": "auto"}
+    """
+    try:
+        key = f"signatures:{game}"
+        data = json.dumps(signatures, indent=2)
+        success = brain.store_knowledge(key, data)
+        return {"success": success, "message": f"Saved {len(signatures)} signatures for '{game}'."}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+def load_signatures(game: str) -> Any:
+    """Load stored AOB signatures for a specific game from the brain DB."""
+    try:
+        key = f"signatures:{game}"
+        raw = brain.recall_knowledge(key)
+        if "No memories found" in raw:
+            return {"error": f"No signatures stored for '{game}'."}
+        # Strip the metadata prefix from recall_knowledge
+        # Format is: [Exact Match: key]\n<data>\n(Saved: timestamp)
+        lines = raw.split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("["):
+                json_start = i
+                break
+        if json_start is not None:
+            json_str = "\n".join(lines[json_start:])
+            # Remove trailing "(Saved: ...)" line
+            if json_str.rstrip().endswith(")"):
+                json_str = "\n".join(json_str.rstrip().rsplit("\n", 1)[:-1])
+            signatures = json.loads(json_str)
+            return {"game": game, "signatures": signatures, "count": len(signatures)}
+        return {"error": "Could not parse stored signatures."}
+    except json.JSONDecodeError:
+        return {"error": "Stored signature data is corrupted."}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def validate_signatures(session_id: str, game: str) -> Any:
+    """
+    Load stored signatures for a game and scan the current binary to check which are alive/dead.
+    Requires an active session with AOB scan support (IDA, CE, or x64dbg).
+    """
+    try:
+        # Load signatures
+        key = f"signatures:{game}"
+        raw = brain.recall_knowledge(key)
+        if "No memories found" in raw:
+            return {"error": f"No signatures stored for '{game}'. Use save_signatures first."}
+
+        lines = raw.split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("["):
+                json_start = i
+                break
+        if json_start is None:
+            return {"error": "Could not parse stored signatures."}
+
+        json_str = "\n".join(lines[json_start:])
+        if json_str.rstrip().endswith(")"):
+            json_str = "\n".join(json_str.rstrip().rsplit("\n", 1)[:-1])
+        signatures = json.loads(json_str)
+
+        # Validate each one
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, "scan_aob"):
+            return handle_error(Exception("Active backend does not support AOB scanning."))
+
+        results = []
+        alive = 0
+        dead = 0
+        for sig in signatures:
+            name = sig.get("name", "Unknown")
+            pattern = sig.get("pattern", "")
+            try:
+                addr = await adapter.scan_aob(pattern)
+                if addr:
+                    results.append({"name": name, "status": "ALIVE", "address": addr})
+                    alive += 1
+                else:
+                    results.append({"name": name, "status": "DEAD", "address": None})
+                    dead += 1
+            except Exception:
+                results.append({"name": name, "status": "ERROR", "address": None})
+                dead += 1
+
+        return {
+            "game": game,
+            "total": len(signatures),
+            "alive": alive,
+            "dead": dead,
+            "results": results
+        }
+    except Exception as e:
+        return handle_error(e)
+
