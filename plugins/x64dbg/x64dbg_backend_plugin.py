@@ -21,6 +21,9 @@ except ImportError:
     from SocketServer import ThreadingMixIn
     PY3 = False
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    pass
+
 try:
     # x64dbgpy API - only available when running inside x64dbg
     from x64dbgpy.pluginsdk._scriptapi import register, memory, module, symbol, debug, assembler, pattern as x64pattern
