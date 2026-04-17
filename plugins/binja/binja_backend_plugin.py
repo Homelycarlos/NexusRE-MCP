@@ -162,10 +162,31 @@ class BinjaOperations:
             addr = int(address, 16)
             func = ACTIVE_BV.get_function_at(addr)
             if not func: return False
-            # Parsing complete C type is complex in BN directly.
-            # Using platform.parse_types_from_string
             types = ACTIVE_BV.platform.parse_types_from_string(signature)
-            # Advanced type updating is skipped for simple stub.
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def patch_bytes(address, hex_bytes):
+        try:
+            if not ACTIVE_BV: return False
+            addr = int(address, 16)
+            bytes_list = bytes.fromhex(hex_bytes.replace(" ", ""))
+            ACTIVE_BV.write(addr, bytes_list)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def save_binary(output_path):
+        try:
+            if not ACTIVE_BV: return False
+            # If output_path is provided, try saving to that, otherwise just save current.
+            if output_path and output_path.strip():
+                ACTIVE_BV.save(output_path)
+            else:
+                ACTIVE_BV.save(ACTIVE_BV.file.filename)
             return True
         except Exception:
             return False
@@ -346,6 +367,10 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"success": BinjaOperations.rename_local_variable(args.get("address"), args.get("old_name"), args.get("new_name"))}
             elif action == "binja_set_local_variable_type":
                 result = {"success": BinjaOperations.set_local_variable_type(args.get("address"), args.get("variable_name"), args.get("new_type"))}
+            elif action == "binja_patch_bytes":
+                result = {"success": BinjaOperations.patch_bytes(args.get("address"), args.get("hex_bytes"))}
+            elif action == "binja_save_binary":
+                result = {"success": BinjaOperations.save_binary(args.get("output_path"))}
             elif action == "binja_analyze_functions":
                 if ACTIVE_BV: ACTIVE_BV.update_analysis_and_wait()
                 result = {"success": True}

@@ -192,6 +192,18 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"success": False}
             elif action == "x64dbg_analyze_functions":
                 result = {"success": True}
+            elif action == "x64dbg_patch_bytes":
+                try:
+                    addr = int(args.get("address"), 16)
+                    hex_str = args.get("hex_bytes", "").replace(" ", "")
+                    # Using x64dbg.DbgCmdExecDirect instead of tricky memory.Write object instantiations
+                    # Command format: set [addr], "hex" or using the bytes directly
+                    b_list = bytes.fromhex(hex_str)
+                    # Memory.Write returns True if succeeded.
+                    succ = memory.Write(addr, b_list, len(b_list))
+                    result = {"success": succ}
+                except Exception:
+                    result = {"success": False}
             else:
                 self.send_response(404)
                 self.end_headers()

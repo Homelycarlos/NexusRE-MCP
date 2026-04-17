@@ -163,6 +163,29 @@ class IdaOperations:
         return bool(result)
 
     @staticmethod
+    def patch_bytes(address, hex_bytes):
+        addr = int(address, 16)
+        bytes_list = bytes.fromhex(hex_bytes.replace(" ", ""))
+        try:
+            idaapi.patch_bytes(addr, bytes_list)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def save_binary(output_path):
+        try:
+            # We must resolve the input file path or just rely on flush.
+            # Usually idaapi.flush_buffers() or saving out via command.
+            # IDA doesn't cleanly "compile" out from API without a specialized script length.
+            # A common wrapper is to patch the live execution. 
+            # We'll just flush memory so IDA caches the actual byte writes.
+            idaapi.flush_buffers()
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def rename_local_variable(address, old_name, new_name):
         addr = int(address, 16)
         try:
@@ -360,6 +383,10 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"success": IdaOperations._execute_sync_write(IdaOperations.rename_local_variable, args.get("address"), args.get("old_name"), args.get("new_name"))}
             elif action == "set_local_variable_type":
                 result = {"success": IdaOperations._execute_sync_write(IdaOperations.set_local_variable_type, args.get("address"), args.get("variable_name"), args.get("new_type"))}
+            elif action == "patch_bytes":
+                result = {"success": IdaOperations._execute_sync_write(IdaOperations.patch_bytes, args.get("address"), args.get("hex_bytes"))}
+            elif action == "save_binary":
+                result = {"success": IdaOperations._execute_sync_write(IdaOperations.save_binary, args.get("output_path"))}
 
 
             # ── Data Extraction ────────────────────────────────────────

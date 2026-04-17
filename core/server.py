@@ -7,6 +7,9 @@ from adapters.ida import IDAAdapter
 from adapters.ghidra import GhidraAdapter
 from adapters.x64dbg import X64DbgAdapter
 from adapters.binja import BinjaAdapter
+from adapters.r2 import Radare2Adapter
+from adapters.frida import FridaAdapter
+from adapters.ce import CheatEngineAdapter
 from schemas.models import (
     FunctionSchema, StringSchema, XrefSchema,
     InstructionSchema, CommentSchema, GlobalVarSchema,
@@ -31,6 +34,12 @@ def get_adapter(session_id: str):
         return X64DbgAdapter(session.backend_url)
     elif session.backend == "binja":
         return BinjaAdapter(session.backend_url)
+    elif session.backend == "radare2":
+        return Radare2Adapter(session.binary_path)  # Note: r2 takes physical binary_path instead of URL
+    elif session.backend == "frida":
+        return FridaAdapter(session.binary_path)    # Frida uses binary_path to store the PID or process name
+    elif session.backend == "cheatengine":
+        return CheatEngineAdapter()                 # Hardcodes default TCP out to 127.0.0.1:10105
     else:
         raise ValueError(f"Unknown backend {session.backend}")
 
@@ -259,5 +268,94 @@ async def set_local_variable_type(session_id: str, address: str, variable_name: 
         adapter = get_adapter(session_id)
         success = await adapter.set_local_variable_type(address, variable_name, new_type)
         return {"success": success}
+    except Exception as e:
+        return handle_error(e)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Binary Patching
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def patch_bytes(session_id: str, address: str, hex_bytes: str) -> Any:
+    """Overwrite physical program memory bytes at a given address (e.g. '90 90' for NOP)."""
+    try:
+        adapter = get_adapter(session_id)
+        success = await adapter.patch_bytes(address, hex_bytes)
+        return {"success": success}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def save_binary(session_id: str, output_path: str) -> Any:
+    """Recompile/Save the patched binary back to the file system to keep changes."""
+    try:
+        adapter = get_adapter(session_id)
+        success = await adapter.save_binary(output_path)
+        return {"success": success}
+    except Exception as e:
+        return handle_error(e)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI Context Memory (Persistent Brain)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from .memory import brain
+
+@mcp.tool()
+def store_knowledge(key: str, summary: str) -> Any:
+    """Permanently save a finding, pointer chain, or context summary about a game or binary to the local SQLite DB."""
+    try:
+        success = brain.store_knowledge(key, summary)
+        return {"success": success, "message": f"Saved under key: {key}"}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+def recall_knowledge(query: str) -> Any:
+    """Recall permanent findings across sessions. Leave query blank or 'list' to see all keys."""
+    try:
+        if query.lower() == "list" or not query:
+            return {"keys": brain.list_knowledge()}
+        return {"data": brain.recall_knowledge(query)}
+    except Exception as e:
+        return handle_error(e)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dynamic Tracing / Game Hacking Executions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def instrument_execution(session_id: str, javascript_code: str) -> Any:
+    """[FRIDA Backend Only] Inject dynamic javascript hooks into the intercepted process."""
+    try:
+        adapter = get_adapter(session_id)
+        res = await getattr(adapter, 'instrument_execution')(javascript_code)
+        return {"outputs": res}
+    except AttributeError:
+        return handle_error(Exception("The selected backend does not support dynamic Frida execution hooks."))
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def scan_aob(session_id: str, pattern: str) -> Any:
+    """[Cheat Engine Only] Scan memory for an AOB pattern (e.g. '48 8b 05 ?? ?? ?? ??')."""
+    try:
+        adapter = get_adapter(session_id)
+        res = await getattr(adapter, 'scan_aob')(pattern)
+        return {"address": res} if res else {"error": "Pattern not found."}
+    except AttributeError:
+        return handle_error(Exception("The selected backend does not support raw AOB scanning."))
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def read_pointer_chain(session_id: str, base_address: str, offsets: List[str]) -> Any:
+    """[Cheat Engine Only] Chase a multi-level pointer. (e.g. ['0x18', '0x20', '0x0'])"""
+    try:
+        adapter = get_adapter(session_id)
+        res = await getattr(adapter, 'read_pointer_chain')(base_address, offsets)
+        return {"address": res} if res else {"error": "Invalid Pointer Chain."}
+    except AttributeError:
+        return handle_error(Exception("The selected backend does not support raw pointer reading."))
     except Exception as e:
         return handle_error(e)

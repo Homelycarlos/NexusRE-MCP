@@ -104,5 +104,15 @@ class BaseAdapter(abc.ABC):
 
     @abc.abstractmethod
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool:
-        """Set the type of a local variable within a function."""
+        """Set the type of a local variable."""
+        pass
+
+    @abc.abstractmethod
+    async def patch_bytes(self, address: str, hex_bytes: str) -> bool:
+        """Overwrite raw execution bytes in the binary."""
+        pass
+
+    @abc.abstractmethod
+    async def save_binary(self, output_path: str) -> bool:
+        """Save the patched binary back to the file system to keep changes."""
         pass

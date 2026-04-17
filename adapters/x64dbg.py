@@ -150,3 +150,10 @@ class X64DbgAdapter(BaseAdapter):
 
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool:
         raise NotImplementedError("Local variable typing is not supported directly in x64dbg.")
+
+    async def patch_bytes(self, address: str, hex_bytes: str) -> bool:
+        res = await self._call("x64dbg_patch_bytes", {"address": address, "hex_bytes": hex_bytes})
+        return res.get("success", False)
+
+    async def save_binary(self, output_path: str) -> bool:
+        raise NotImplementedError("Saving patched binaries is generally done via UI / Scylla in x64dbg. Not natively supported here via simple plugin API.")

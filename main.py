@@ -21,6 +21,10 @@ def get_config_json() -> dict:
                     "--with", "mcp[cli]",
                     "--with", "pydantic",
                     "--with", "aiohttp",
+                    "--with", "frida",
+                    "--with", "r2pipe",
+                    "--with", "pymem",
+                    "--with", "aiosqlite",
                     script_path
                 ]
             }
@@ -169,10 +173,13 @@ Usage:
   uv run main.py --help          Show this help message
 
 Supported Backends:
-  - ida (Default port: 10101)
-  - ghidra (Default port: 10102)
-  - x64dbg (Default port: 10103)
-  - binja (Default port: 10104)
+  - ida         (Default port: 10101)
+  - ghidra      (Default port: 10102)
+  - x64dbg      (Default port: 10103)
+  - binja       (Default port: 10104)
+  - cheatengine (Default port: 10105)
+  - radare2     (Headless)
+  - frida       (Headless JS Trapping)
 """)
     sys.exit(0)
 

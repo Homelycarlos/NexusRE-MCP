@@ -154,3 +154,11 @@ class IDAAdapter(BaseAdapter):
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool:
         res = await self._call("set_local_variable_type", {"address": address, "variable_name": variable_name, "new_type": new_type})
         return res.get("success", False)
+
+    async def patch_bytes(self, address: str, hex_bytes: str) -> bool:
+        res = await self._call("patch_bytes", {"address": address, "hex_bytes": hex_bytes})
+        return res.get("success", False)
+
+    async def save_binary(self, output_path: str) -> bool:
+        res = await self._call("save_binary", {"output_path": output_path})
+        return res.get("success", False)
