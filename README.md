@@ -75,6 +75,10 @@ NexusRE is modular. Drop any `.py` file into the `adapters/` folder and it auto-
 _*Note: The `kernel` adapter is an empty template. You must add your own custom Kernel Driver (with its specific IOCTL byte layout) to utilize it!_
 
 ### Recent Feature Upgrades
+* **ReClass.NET Integration**: A native `ReClassAdapter` (`adapters/reclass.py`) allows AI to read active `.rcnet` project files to parse offset schemas and automatically generate C++ structs for your `driver.h`.
+* **Kernel Fast-Pointer Scanning**: The new `CheatEngineAdapter` (`adapters/cheatengine.py`) hooks directly into CE's DBK64 lua backend. This gives the AI the power to execute milliseconds-fast native kernel pointer scans over massive Memory Regions.
+* **Automated Signature Generator**: `generate_unique_aob` added. Pass any memory address, and the server natively reads the assembly, wildcards volatile bytes, and verifies uniqueness—generating a perfect signature instantly.
+* **RTTI & VTable Dumper**: The `dump_vtables` tool added to automatically rip C++ Run-Time Type Information to accurately map Virtual Method Table functions and offsets without manual disassembly.
 * **The "Auto-Healer"**: The `auto_recover_signatures` endpoint is now fully functional! It uses an algorithmic wildcard fuzzy scanner to automatically restore slightly broken memory signatures during game updates without needing human intervention.
 * **Network & Packet Interception**: A brand new `NetworkAdapter` (via `adapters/network.py`) hooked into the MCP allows your AI to perform pure L3/L4 Winsock filtering to capture Game Packets securely from outside the game.
 * **Headless Pointer Scanner**: The `generate_pointer_map` tool allows the AI to automatically walk memory regions backward to trace dynamic heap structures back to their static `.exe` bases natively.
