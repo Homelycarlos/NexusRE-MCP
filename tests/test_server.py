@@ -1,7 +1,6 @@
 import pytest
 import asyncio
-from core.server import mcp, init_session, list_sessions
-from core.session import session_manager
+from core.server import mcp, init_session, list_sessions, session_manager
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
