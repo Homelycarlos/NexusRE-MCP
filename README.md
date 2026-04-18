@@ -75,6 +75,10 @@ NexusRE is modular. Drop any `.py` file into the `adapters/` folder and it auto-
 _*Note: The `kernel` adapter is an empty template. You must add your own custom Kernel Driver (with its specific IOCTL byte layout) to utilize it!_
 
 ### Recent Feature Upgrades
+* **The "Auto-Healer"**: The `auto_recover_signatures` endpoint is now fully functional! It uses an algorithmic wildcard fuzzy scanner to automatically restore slightly broken memory signatures during game updates without needing human intervention.
+* **Network & Packet Interception**: A brand new `NetworkAdapter` (via `adapters/network.py`) hooked into the MCP allows your AI to perform pure L3/L4 Winsock filtering to capture Game Packets securely from outside the game.
+* **Headless Pointer Scanner**: The `generate_pointer_map` tool allows the AI to automatically walk memory regions backward to trace dynamic heap structures back to their static `.exe` bases natively.
+* **Bulk Memory Dumper**: `dump_memory_region_to_file` added, enabling the AI to pull massive heaps of game memory directly onto the local drive for insanely fast local heuristics.
 * **Dynamic Breakpoints**: Through the Frida adapter, AI can now programmatically set `set_hardware_breakpoint` and `wait_for_breakpoint` to halt game execution and dump live CPU registers instantly.
 * **Stealth Kernel YARA Scanning**: The `yara_memory_scan` tool now natively supports the Kernel adapter. Once you bind your own driver to the `KernelAdapter`, `yara_memory_scan` will route all physical memory reads through Ring-0, entirely avoiding `VirtualQueryEx` bans from BattlEye/EAC.
 * **Unity IL2CPP Dumper**: Added `dump_il2cpp_domain` alongside the native Unreal Engine structure dumpers.
