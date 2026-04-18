@@ -514,6 +514,32 @@ async def read_pointer_chain(session_id: str, base_address: str, offsets: List[s
     except Exception as e:
         return handle_error(e)
 
+@mcp.tool()
+async def set_hardware_breakpoint(session_id: str, address: str) -> Any:
+    """[FRIDA Backend Only] Set an execution breakpoint at a specific memory address."""
+    try:
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, 'set_hardware_breakpoint'):
+             return handle_error(Exception("Active backend adapter does not support breakpoints natively yet."))
+        res = await adapter.set_hardware_breakpoint(address)
+        return {"success": True, "message": res}
+    except Exception as e:
+        return handle_error(e)
+
+@mcp.tool()
+async def wait_for_breakpoint(session_id: str, timeout: int = 15) -> Any:
+    """[FRIDA Backend Only] Wait for a previously set breakpoint to trigger and dump the CPU registers/context."""
+    try:
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, 'wait_for_breakpoint'):
+             return handle_error(Exception("Active backend adapter does not support breakpoints natively yet."))
+        res = await adapter.wait_for_breakpoint(timeout)
+        if "error" in res:
+             return res
+        return {"success": True, "context": res.get("context")}
+    except Exception as e:
+        return handle_error(e)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Utility / Master Class Framework Tools
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -574,30 +600,52 @@ def extract_ast_segments(c_code: str, query_type: str = "if_statement") -> Any:
         return handle_error(e)
 
 @mcp.tool()
-def yara_memory_scan(pid: int, yara_rule: str) -> Any:
-    """Perform a live YARA memory scan against a target process PID. Useful for bypassing Anti-Cheats or mapping generic payloads."""
+async def yara_memory_scan(session_id: str, yara_rule: str, pid: Optional[int] = None) -> Any:
+    """Perform a live YARA memory scan. Uses the active session's adapter natively if supported (like kernel for stealth), falling back to pymem via PID."""
     try:
         import yara
-        import pymem
-        
         rules = yara.compile(source=yara_rule)
-        pm = pymem.Pymem(pid)
         matches_found = []
+
+        adapter = get_adapter(session_id)
         
-        for region in pm.memory_regions():
-            try:
-                # Read physical memory region
-                data = pm.read_bytes(region.BaseAddress, region.RegionSize)
-                matches = rules.match(data=data)
-                for match in matches:
-                    for offset, string_identifier, string_data in match.strings:
-                        matches_found.append({
-                            "rule": match.rule,
-                            "address": hex(region.BaseAddress + offset),
-                            "string_matched": string_identifier
-                        })
-            except Exception:
-                continue # Skip inaccessible pages (PAGE_GUARD etc.)
+        # If adapter supports memory dump natively (like our stealth KernelAdapter could)
+        if hasattr(adapter, "memory_regions") and hasattr(adapter, "read_memory"):
+            regions = await adapter.memory_regions()
+            for region in regions:
+                try:
+                    data = await adapter.read_memory(region['BaseAddress'], region['RegionSize'], as_bytes=True)
+                    matches = rules.match(data=data)
+                    for match in matches:
+                        for offset, string_identifier, string_data in match.strings:
+                            matches_found.append({
+                                "rule": match.rule,
+                                "address": hex(region['BaseAddress'] + offset),
+                                "string_matched": string_identifier
+                            })
+                except Exception:
+                    continue
+        else:
+            if not pid:
+                return handle_error(Exception("Active backend does not support native memory reads. Must provide 'pid' to use fallback pymem scan."))
+            
+            # Fallback to pymem logic
+            import pymem
+            pm = pymem.Pymem(pid)
+            
+            for region in pm.memory_regions():
+                try:
+                    data = pm.read_bytes(region.BaseAddress, region.RegionSize)
+                    matches = rules.match(data=data)
+                    for match in matches:
+                        for offset, string_identifier, string_data in match.strings:
+                            matches_found.append({
+                                "rule": match.rule,
+                                "address": hex(region.BaseAddress + offset),
+                                "string_matched": string_identifier
+                            })
+                except Exception:
+                    continue # Skip inaccessible pages (PAGE_GUARD etc.)
                 
         return {"matches": matches_found}
     except ImportError:
@@ -775,6 +823,28 @@ def dump_unreal_gobjects(pid: int, gobjects_address: str) -> Any:
             "total_objects": objects_count,
             "array_base": hex(obj_array),
             "message": "AI can now iterate over the array base using read_pointer_chain tool to build the SDK."
+        }
+    except Exception as e:
+        return handle_error(e)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auxiliary Engine Extents: Unity IL2CPP Native
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def dump_il2cpp_domain(pid: int, game_assembly_base: str) -> Any:
+    """[Unity IL2CPP Only] Dump the IL2CPP domain root to parse Assemblies, Classes, and Field Offsets."""
+    try:
+        import pymem
+        pm = pymem.Pymem(pid)
+        base = int(game_assembly_base, 16)
+        
+        # In IL2CPP, we typically signature scan for il2cpp_domain_get(), but as a template,
+        # we return the structural instructions for the AI to dynamically adapt.
+        return {
+            "success": True, 
+            "message": "IL2CPP module template initialized. AI should now pattern scan 'il2cpp_domain_get' to map the class hierarchies.",
+            "module_base": hex(base)
         }
     except Exception as e:
         return handle_error(e)

@@ -58,6 +58,39 @@ class FridaAdapter(BaseAdapter):
         script.unload()
         return results
 
+    async def set_hardware_breakpoint(self, address: str, context_lines: int = 5) -> str:
+        """Place an execution breakpoint via frida's Interceptor."""
+        self._attach()
+        import frida
+
+        js = f"""
+        Interceptor.attach(ptr('{address}'), {{
+            onEnter: function(args) {{
+                send({{'context': this.context}});
+            }}
+        }});
+        """
+        script = self.session.create_script(js)
+        
+        self.last_bp_hit = None
+        def on_message(message, data):
+            if message['type'] == 'send':
+                self.last_bp_hit = message['payload']
+        
+        script.on('message', on_message)
+        script.load()
+        return f"Breakpoint set at {address}"
+
+    async def wait_for_breakpoint(self, timeout: int = 15) -> Optional[dict]:
+        """Wait for the previously set breakpoint to trigger, returning CPU registers."""
+        for _ in range(timeout):
+            if getattr(self, 'last_bp_hit', None):
+                res = self.last_bp_hit
+                self.last_bp_hit = None
+                return res
+            await asyncio.sleep(1)
+        return {"error": "Breakpoint timeout reached"}
+
     # ── Unsupported Static Methods ────────────────────────────────────────
 
     async def get_current_address(self) -> Optional[str]: return None

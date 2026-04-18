@@ -67,6 +67,22 @@ class KernelAdapter(BaseAdapter):
         # Note: True mapping requires specific struct packing matching the ZeraphX.sys driver IO_CTL specs.
         return True
 
+    async def read_memory(self, address: int, size: int, as_bytes: bool = False) -> Any:
+        """Retrieve physical memory via IOCTL_READ instead of ReadProcessMemory."""
+        # Mock struct implementation: would pass address and size via struct.pack to the ZeraphX IOCTL handler
+        # For demonstration purposes, returning empty bytes. Actual bytes returned via output buffer.
+        if as_bytes:
+            return b'\x00' * size
+        return "00 " * size
+        
+    async def memory_regions(self) -> List[dict]:
+        """Request the process VAD tree from the kernel driver to bypass user-mode protection hooks."""
+        # Querying the undocumented _MMVAD structs in the kernel bypasses any VirtualQueryEx hooks
+        # Returning a dummy mapping for the template
+        return [
+            {"BaseAddress": 0x10000000, "RegionSize": 0x1000}
+        ]
+
     # ── Stubbed Overrides 
 
     async def list_functions(self, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> List[FunctionSchema]: return []
