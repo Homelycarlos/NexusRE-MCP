@@ -186,3 +186,30 @@ class IDAAdapter(BaseAdapter):
     async def save_binary(self, output_path: str) -> bool:
         res = await self._call("save_binary", {"output_path": output_path})
         return res.get("success", False)
+
+    # ── Dynamic Debugger & Memory ─────────────────────────────────────────
+
+    async def set_hardware_breakpoint(self, address: str, context_lines: int = 5) -> str:
+        """Set a breakpoint via IDA's internal debugger (ida_dbg)."""
+        res = await self._call("set_bpt", {"address": address})
+        return res.get("message", f"Breakpoint request sent for {address}")
+
+    async def wait_for_breakpoint(self, timeout: int = 15) -> Optional[dict]:
+        """Wait for IDA debugger to hit the breakpoint."""
+        res = await self._call("wait_bpt", {"timeout": timeout})
+        if "error" in res:
+            return {"error": res["error"]}
+        return {"context": res.get("context", {})}
+
+    async def read_memory(self, address: int, size: int, as_bytes: bool = False) -> Any:
+        """Read live debugged memory or statically mapped segments in IDA."""
+        res = await self._call("read_memory", {"address": address, "size": size})
+        hex_data = res.get("data", "")
+        if as_bytes:
+            return bytes.fromhex(hex_data.replace(" ", ""))
+        return hex_data
+
+    async def memory_regions(self) -> List[dict]:
+        """Get all memory segments mapped in IDA database."""
+        res = await self._call("memory_regions")
+        return res.get("regions", [])
