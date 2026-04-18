@@ -240,6 +240,59 @@ class IdaOperations:
             
         return hex(ea) if ea != idc.BADADDR else None
 
+    # ── Dynamic Debugging & Memory ────────────────────────────────────────
+
+    @staticmethod
+    def set_bpt(address):
+        addr = int(address, 16)
+        import ida_dbg
+        if ida_dbg.add_bpt(addr):
+            return {"message": f"Hardware breakpoint set at {hex(addr)}"}
+        return {"error": "Failed to set breakpoint"}
+
+    @staticmethod
+    def wait_bpt(timeout):
+        import ida_dbg
+        # waiting natively in python could block the thread, but we execute in sync
+        # Usually requires a debugger hook, but for MVP:
+        res = ida_dbg.wait_for_next_event(ida_dbg.WFNE_CONT | ida_dbg.WFNE_SUSP, timeout)
+        if res == 1:
+            # Hit breakpoint
+            ctx = {}
+            if hasattr(ida_dbg, 'get_reg_val'):
+                for reg in ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "rip", "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip"]:
+                    val = ida_dbg.get_reg_val(reg)
+                    if val is not None:
+                        ctx[reg] = hex(val)
+            return {"context": ctx}
+        return {"error": "Timeout or did not hit breakpoint"}
+
+    @staticmethod
+    def read_memory(address, size):
+        # Native read_dbg_memory
+        import ida_dbg
+        data = ida_dbg.read_dbg_memory(address, size)
+        if data:
+            return {"data": data.hex()}
+        return {"data": ""}
+
+    @staticmethod
+    def memory_regions():
+        # Using segments as memory regions for static, or dbg.get_memory_info
+        import ida_dbg
+        ranges = ida_dbg.meminfo_vec_t()
+        if ida_dbg.get_memory_info(ranges):
+            regs = []
+            for r in ranges:
+                regs.append({
+                    "start": hex(r.start_ea),
+                    "end": hex(r.end_ea),
+                    "name": r.name,
+                    "perms": r.perm
+                })
+            return {"regions": regs}
+        return {"regions": []}
+
     # ── Data Extraction ───────────────────────────────────────────────────
 
     @staticmethod
@@ -424,6 +477,17 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {"success": True}
             elif action == "scan_aob":
                 result = {"address": IdaOperations._execute_sync(IdaOperations.scan_aob, args.get("pattern"))}
+                
+            # ── Dynamic Debugging & Memory ────────────────────────────
+            elif action == "set_bpt":
+                result = IdaOperations._execute_sync(IdaOperations.set_bpt, args.get("address"))
+            elif action == "wait_bpt":
+                result = IdaOperations._execute_sync(IdaOperations.wait_bpt, args.get("timeout", 15))
+            elif action == "read_memory":
+                result = IdaOperations._execute_sync(IdaOperations.read_memory, args.get("address"), args.get("size"))
+            elif action == "memory_regions":
+                result = IdaOperations._execute_sync(IdaOperations.memory_regions)
+                
             else:
                 self.send_response(404)
                 self.end_headers()
