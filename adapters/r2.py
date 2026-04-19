@@ -105,7 +105,7 @@ class Radare2Adapter(BaseAdapter):
             xrefs.append(XrefSchema(
                 from_addr=hex(x.get('from', 0)),
                 to_addr=address,
-                type="Code" if x.get('type') == b'c' else "Data"
+                type="Code" if x.get('type') == 'C' else "Data"
             ))
         return xrefs
 

@@ -29,7 +29,7 @@ class GDBAdapter(BaseAdapter):
     async def _send(self, command: str) -> List[dict]:
         if not self.gdbmi: return []
         # Run in a separate thread to prevent blocking FastMCP event loop
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.gdbmi.write, command)
 
     async def get_current_address(self) -> Optional[str]:

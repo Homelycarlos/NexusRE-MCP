@@ -34,7 +34,7 @@ class X64DbgAdapter(BaseAdapter):
         for attempt in range(3):
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{self.base_url}/rpc", json=payload) as resp:
+                    async with session.post(f"{self.base_url}/", json=payload) as resp:
                         resp.raise_for_status()
                         data = await resp.json()
                         if cache_key:

@@ -1,7 +1,7 @@
 import asyncio
 import ctypes
 import os
-from typing import List, Optional
+from typing import List, Optional, Any
 from .base import BaseAdapter
 from schemas.models import (
     FunctionSchema, StringSchema, XrefSchema,

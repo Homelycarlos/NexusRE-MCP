@@ -51,7 +51,7 @@ class CheatEngineAdapter(BaseAdapter):
         payload = {"action": "execute_lua", "script": script}
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post(f"{self.base_url}/rpc", json=payload) as resp:
+                async with session.post(f"{self.base_url}/", json=payload) as resp:
                     resp.raise_for_status()
                     return await resp.json()
         except Exception as e:

@@ -508,13 +508,16 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         # Suppress noisy logging to IDA output window
         pass
 
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 
 # Global references to keep server alive and allow shutting down
-if "SERVER_INSTANCE" in globals() and SERVER_INSTANCE is not None:
+if 'SERVER_INSTANCE' in dir() and SERVER_INSTANCE is not None:
     print("[IDA-MCP] Shutting down previous server instance...")
-    SERVER_INSTANCE.shutdown()
-    SERVER_INSTANCE.server_close()
+    try:
+        SERVER_INSTANCE.shutdown()
+        SERVER_INSTANCE.server_close()
+    except Exception:
+        pass
 
 def start_server():
     global SERVER_INSTANCE

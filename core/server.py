@@ -64,7 +64,7 @@ def get_adapter(session_id: str):
 
     # Different adapters take different constructor args
     headless_backends = {"r2", "radare2", "frida", "gdb", "kernel", "dma"}
-    no_arg_backends = {"ce", "cheatengine"}
+    no_arg_backends = set()  # No truly arg-less backends currently
 
     if backend in no_arg_backends:
         return adapter_cls()
