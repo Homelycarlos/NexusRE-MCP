@@ -41,12 +41,12 @@ class GhidraRequestHandler(BaseHTTPRequestHandler):
             result = {}
             
             # --- Native Ghidra Program Execution ---
-            if 'currentProgram' in globals():
-                prog = currentProgram
-                
+            prog = getattr(self, 'currentProgram', None)
+            if prog:
                 if action == 'ghidra_get_current_address':
-                    if 'currentLocation' in globals() and currentLocation:
-                        result = {"address": "0x" + currentLocation.getAddress().toString()}
+                    loc = getattr(self, 'currentLocation', None)
+                    if loc:
+                        result = {"address": "0x" + loc.getAddress().toString()}
                         
                 elif action == 'ghidra_list_functions':
                     funcs = []
@@ -98,6 +98,11 @@ def start_server():
 
 if __name__ == "__main__":
     print("\nStarting NexusRE MCP Ghidra Plugin...")
+    if 'currentProgram' in globals():
+        GhidraRequestHandler.currentProgram = currentProgram
+    if 'currentLocation' in globals():
+        GhidraRequestHandler.currentLocation = currentLocation
+        
     t = threading.Thread(target=start_server)
     t.daemon = True
     t.start()
