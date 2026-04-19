@@ -375,7 +375,7 @@ async def rename_symbol(session_id: str, address: str, name: str) -> Any:
                 try:
                     from .similarity import similarity_engine
                     from .cache import decompile_cache
-                    session = sm.get_session(session_id)
+                    session = session_manager.get_session(session_id)
                     binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
                     # Try cache first, then decompile
                     cache_key = f"{session_id}:decomp:{address}"
@@ -1752,7 +1752,7 @@ async def index_functions_for_similarity(session_id: str, limit: int = 200) -> A
     try:
         from .similarity import similarity_engine
         adapter = get_adapter(session_id)
-        session = sm.get_session(session_id)
+        session = session_manager.get_session(session_id)
         binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
 
         funcs = await adapter.list_functions(offset=0, limit=limit)
@@ -1976,6 +1976,7 @@ async def export_symbols_as_idc(session_id: str, output_path: str = "", limit: i
     try:
         adapter = get_adapter(session_id)
         funcs = await adapter.list_functions(offset=0, limit=limit)
+        funcs = [f.model_dump() for f in funcs]
         if not funcs:
             return {"error_message": "No functions found"}
 
@@ -2018,6 +2019,7 @@ async def export_symbols_as_ghidra_script(session_id: str, output_path: str = ""
     try:
         adapter = get_adapter(session_id)
         funcs = await adapter.list_functions(offset=0, limit=limit)
+        funcs = [f.model_dump() for f in funcs]
         if not funcs:
             return {"error_message": "No functions found"}
 
@@ -2079,6 +2081,8 @@ async def diff_binaries(session_id_old: str, session_id_new: str, limit: int = 5
 
         old_funcs = await old_adapter.list_functions(offset=0, limit=limit)
         new_funcs = await new_adapter.list_functions(offset=0, limit=limit)
+        old_funcs = [f.model_dump() for f in old_funcs]
+        new_funcs = [f.model_dump() for f in new_funcs]
 
         old_by_name = {f["name"]: f for f in old_funcs}
         new_by_name = {f["name"]: f for f in new_funcs}
@@ -2249,7 +2253,7 @@ async def dump_vtable(session_id: str, address: str, max_entries: int = 50) -> A
     """
     try:
         adapter = get_adapter(session_id)
-        session = sm.get_session(session_id)
+        session = session_manager.get_session(session_id)
         ptr_size = 8 if session and "64" in session.architecture else 4
 
         vtable_entries = []
@@ -2391,10 +2395,11 @@ async def auto_annotate(session_id: str, limit: int = 200, min_confidence: float
         from .similarity import similarity_engine
         from .cache import decompile_cache
         adapter = get_adapter(session_id)
-        session = sm.get_session(session_id)
+        session = session_manager.get_session(session_id)
         binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
 
         funcs = await adapter.list_functions(offset=0, limit=limit)
+        funcs = [f.model_dump() for f in funcs]
         if not funcs:
             return {"error_message": "No functions found"}
 
@@ -2603,6 +2608,7 @@ async def vuln_scan(session_id: str, limit: int = 100) -> Any:
         adapter = get_adapter(session_id)
 
         funcs = await adapter.list_functions(offset=0, limit=limit)
+        funcs = [f.model_dump() for f in funcs]
         if not funcs:
             return {"error_message": "No functions found"}
 
@@ -2712,7 +2718,7 @@ def detect_backends() -> Any:
     """
     try:
         from .auto_session import auto_create_sessions
-        results = auto_create_sessions(sm)
+        results = auto_create_sessions(session_manager)
         active = [r for r in results if r["status"] in ("created", "already_exists")]
         return {
             "detected": results,
@@ -2746,7 +2752,7 @@ async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
         # Step 1: Resolve session
         if session_id == "auto":
             from .auto_session import auto_create_sessions
-            results = auto_create_sessions(sm)
+            results = auto_create_sessions(session_manager)
             active = [r for r in results if r["status"] in ("created", "already_exists")]
             if not active:
                 return {"error_message": "No backends detected. Start IDA/Ghidra and try again."}
@@ -2756,12 +2762,13 @@ async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
                 "result": f"Using session: {session_id} ({active[0]['backend']})"
             })
         else:
-            session_id = sm.resolve_session_id(session_id)
+            session_id = session_manager.resolve_session_id(session_id)
 
         adapter = get_adapter(session_id)
 
         # Step 2: List functions
         funcs = await adapter.list_functions(offset=0, limit=limit)
+        funcs = [f.model_dump() for f in funcs]
         func_count = len(funcs) if funcs else 0
         report["steps"].append({
             "step": "list_functions",
@@ -2875,19 +2882,20 @@ async def quick_scan(session_id: str = "auto") -> Any:
     try:
         if session_id == "auto":
             from .auto_session import auto_create_sessions
-            results = auto_create_sessions(sm)
+            results = auto_create_sessions(session_manager)
             active = [r for r in results if r["status"] in ("created", "already_exists")]
             if not active:
                 return {"error_message": "No backends detected. Start a RE tool and try again."}
             session_id = active[0]["session_id"]
 
-        session_id = sm.resolve_session_id(session_id)
+        session_id = session_manager.resolve_session_id(session_id)
         adapter = get_adapter(session_id)
 
         overview = {"session_id": session_id}
 
         # Functions
         funcs = await adapter.list_functions(offset=0, limit=500)
+        funcs = [f.model_dump() for f in funcs]
         if funcs:
             overview["function_count"] = len(funcs)
             auto_named = sum(1 for f in funcs if f.get("name", "").startswith(("sub_", "FUN_")))
@@ -2961,7 +2969,7 @@ def server_status() -> str:
         lines.append("")
 
         # Sessions
-        sessions = sm.list_sessions()
+        sessions = session_manager.list_sessions()
         lines.append(f"📋 SESSIONS: {len(sessions)}")
         for s in sessions[:5]:
             lines.append(f"  {s['session_id']:20s} → {s['backend']:10s}")
