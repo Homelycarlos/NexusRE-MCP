@@ -4,13 +4,31 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nexusre-mcp"
-version = "0.1.0"
-description = "Enterprise-grade MCP Server for Reverse Engineering and Game Hacking"
+version = "4.0.0"
+description = "Enterprise-grade MCP Server for Reverse Engineering — Auto-annotation, vulnerability scanning, cross-tool sync, and 50+ AI-powered analysis tools"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [
   {name = "Homelycarlos", email = "homelycarlos@example.com"}
+]
+keywords = [
+    "mcp", "reverse-engineering", "ida-pro", "ghidra", "x64dbg",
+    "binary-analysis", "game-hacking", "decompilation", "frida",
+    "vulnerability-scanner", "ai-tools"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Disassemblers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "mcp[cli]>=1.0.0",
@@ -31,8 +49,29 @@ all = [
     "PyGithub>=2.1.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Homelycarlos/NexusRE-MCP"
+Repository = "https://github.com/Homelycarlos/NexusRE-MCP"
+Issues = "https://github.com/Homelycarlos/NexusRE-MCP/issues"
+
 [project.scripts]
 nexusre-mcp = "main:main_cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["core", "adapters", "schemas"]
+packages = ["core", "adapters", "schemas", "plugins"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "core/",
+    "adapters/",
+    "schemas/",
+    "plugins/",
+    "main.py",
+    "install_plugins.bat",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]

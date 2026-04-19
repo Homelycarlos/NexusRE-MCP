@@ -67,11 +67,24 @@ def get_adapter(session_id: str):
     no_arg_backends = set()  # No truly arg-less backends currently
 
     if backend in no_arg_backends:
-        return adapter_cls()
+        adapter = adapter_cls()
     elif backend in headless_backends:
-        return adapter_cls(session.binary_path)
+        adapter = adapter_cls(session.binary_path)
     else:
-        return adapter_cls(session.backend_url)
+        adapter = adapter_cls(session.backend_url)
+
+    # Error recovery: verify the adapter is alive for HTTP adapters
+    if backend not in headless_backends:
+        try:
+            import urllib.request
+            url = session.backend_url
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('Connection', 'close')
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            logger.warning(f"Backend at {session.backend_url} may be unreachable. Proceeding anyway.")
+
+    return adapter
 
 def _log_command(tool_name: str, args: dict, result: Any, session_id: str = None, duration_ms: int = 0):
     """Append to in-memory audit log and persist to brain DB."""
@@ -193,8 +206,15 @@ async def list_functions(session_id: str, offset: int = 0, limit: int = 100, fil
 async def decompile_function(session_id: str, address: str) -> Any:
     """Decompile a function at the given address and return C pseudocode."""
     try:
+        from .cache import decompile_cache
+        cache_key = f"{session_id}:decomp:{address}"
+        cached = decompile_cache.get(cache_key)
+        if cached is not None:
+            return {"decompiled": cached, "cached": True}
         adapter = get_adapter(session_id)
         code = await adapter.decompile_function(address)
+        if code:
+            decompile_cache.set(cache_key, code)
         return {"decompiled": code}
     except Exception as e:
         return handle_error(e)
@@ -203,9 +223,17 @@ async def decompile_function(session_id: str, address: str) -> Any:
 async def disassemble_at(session_id: str, address: str) -> Any:
     """Disassemble the function or block at the given address. Returns structured instruction data."""
     try:
+        from .cache import disasm_cache
+        cache_key = f"{session_id}:disasm:{address}"
+        cached = disasm_cache.get(cache_key)
+        if cached is not None:
+            return cached
         adapter = get_adapter(session_id)
         instructions = await adapter.disassemble_at(address)
-        return [i.model_dump() for i in instructions]
+        result = [i.model_dump() for i in instructions]
+        if result:
+            disasm_cache.set(cache_key, result)
+        return result
     except Exception as e:
         return handle_error(e)
 
@@ -342,6 +370,28 @@ async def rename_symbol(session_id: str, address: str, name: str) -> Any:
         if success:
             from .diff_engine import diff_engine
             diff_engine.record(session_id, "rename", address, old_name, name)
+            # Pattern Learning: auto-index the function for similarity search
+            if old_name.startswith("sub_") or old_name.startswith("FUN_"):
+                try:
+                    from .similarity import similarity_engine
+                    from .cache import decompile_cache
+                    session = sm.get_session(session_id)
+                    binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
+                    # Try cache first, then decompile
+                    cache_key = f"{session_id}:decomp:{address}"
+                    code = decompile_cache.get(cache_key)
+                    if not code:
+                        code = await adapter.decompile_function(address)
+                        if code:
+                            decompile_cache.set(cache_key, code)
+                    if code and len(code) > 20:
+                        similarity_engine.index_function(session_id, binary_name, address, name, code)
+                        logger.info(f"Pattern learned: {name} @ {address}")
+                except Exception:
+                    pass  # Pattern learning is best-effort
+            # Invalidate function cache for this address
+            from .cache import function_cache
+            function_cache.invalidate(f"{session_id}:func:{address}")
         return {"success": success}
     except Exception as e:
         return handle_error(e)
@@ -2320,3 +2370,330 @@ def save_frida_snippet(name: str, description: str, template: str,
     except Exception as e:
         return handle_error(e)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. AUTO-ANNOTATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def auto_annotate(session_id: str, limit: int = 200, min_confidence: float = 0.4,
+                        dry_run: bool = False) -> Any:
+    """
+    Automatically identify and label functions in the binary.
+    Decompiles the first N functions, matches against 25+ known patterns
+    (crypto, networking, anti-cheat, game engines, obfuscation),
+    and renames them if confidence exceeds the threshold.
+
+    Set dry_run=True to preview matches without renaming.
+    """
+    try:
+        from .auto_annotator import match_function
+        from .similarity import similarity_engine
+        from .cache import decompile_cache
+        adapter = get_adapter(session_id)
+        session = sm.get_session(session_id)
+        binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
+
+        funcs = await adapter.list_functions(offset=0, limit=limit)
+        if not funcs:
+            return {"error_message": "No functions found"}
+
+        # Collect addresses for batch decompile if available
+        addresses = [f.get("address", "") for f in funcs if f.get("address")]
+        decompiled = {}
+
+        # Try batch decompilation first (10x faster on Ghidra)
+        if hasattr(adapter, 'batch_decompile') and session and session.backend == "ghidra":
+            try:
+                batch_results = await adapter.batch_decompile(addresses[:limit])
+                if isinstance(batch_results, dict):
+                    decompiled = batch_results
+                elif isinstance(batch_results, list):
+                    for i, code in enumerate(batch_results):
+                        if i < len(addresses):
+                            decompiled[addresses[i]] = code
+            except Exception:
+                pass  # Fall through to sequential
+
+        # Sequential fallback for uncached functions
+        for func in funcs:
+            addr = func.get("address", "")
+            if addr not in decompiled:
+                cache_key = f"{session_id}:decomp:{addr}"
+                cached = decompile_cache.get(cache_key)
+                if cached:
+                    decompiled[addr] = cached
+                else:
+                    try:
+                        code = await adapter.decompile_function(addr)
+                        if code:
+                            decompiled[addr] = code
+                            decompile_cache.set(cache_key, code)
+                    except Exception:
+                        continue
+
+        # Match against known patterns + learned patterns
+        annotations = []
+        for func in funcs:
+            addr = func.get("address", "")
+            name = func.get("name", "")
+            code = decompiled.get(addr, "")
+            if not code or len(code) < 20:
+                continue
+
+            # Only annotate auto-named functions
+            if not (name.startswith("sub_") or name.startswith("FUN_") or name.startswith("_")):
+                continue
+
+            # Check known patterns
+            matches = match_function(code)
+            if matches and matches[0]["confidence"] >= min_confidence:
+                best = matches[0]
+                new_name = f"{best['label']}_{addr[-6:]}"
+
+                entry = {
+                    "address": addr,
+                    "old_name": name,
+                    "suggested_name": new_name,
+                    "pattern": best["label"],
+                    "category": best["category"],
+                    "confidence": round(best["confidence"], 2)
+                }
+
+                if not dry_run:
+                    try:
+                        success = await adapter.rename_symbol(addr, new_name)
+                        entry["renamed"] = success
+                        if success:
+                            from .diff_engine import diff_engine
+                            diff_engine.record(session_id, "auto_annotate", addr, name, new_name)
+                            similarity_engine.index_function(session_id, binary_name, addr, new_name, code)
+                    except Exception:
+                        entry["renamed"] = False
+                else:
+                    entry["renamed"] = "dry_run"
+
+                annotations.append(entry)
+
+            # Also check learned patterns (similarity search)
+            elif not matches:
+                sim_results = similarity_engine.find_similar(code, threshold=0.7, top_k=1)
+                if sim_results:
+                    best_sim = sim_results[0]
+                    suggested = f"like_{best_sim['name']}_{addr[-4:]}"
+                    entry = {
+                        "address": addr,
+                        "old_name": name,
+                        "suggested_name": suggested,
+                        "pattern": f"similar_to:{best_sim['name']}",
+                        "category": "learned",
+                        "confidence": round(best_sim["similarity"], 2)
+                    }
+                    if not dry_run and best_sim["similarity"] >= 0.8:
+                        try:
+                            success = await adapter.rename_symbol(addr, suggested)
+                            entry["renamed"] = success
+                        except Exception:
+                            entry["renamed"] = False
+                    else:
+                        entry["renamed"] = "dry_run" if dry_run else "below_threshold"
+                    annotations.append(entry)
+
+        # Category summary
+        categories = {}
+        for a in annotations:
+            cat = a["category"]
+            categories[cat] = categories.get(cat, 0) + 1
+
+        return {
+            "total_scanned": len(funcs),
+            "total_decompiled": len(decompiled),
+            "annotations": annotations[:100],
+            "annotation_count": len(annotations),
+            "category_summary": categories,
+            "dry_run": dry_run
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. PATTERN LEARNING — SUGGEST NAMES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def suggest_names(session_id: str, address: str, top_k: int = 5) -> Any:
+    """
+    Suggest meaningful names for a function based on learned patterns.
+    Uses the similarity engine to find functions you've previously renamed
+    that look similar to this one. Self-improving as you rename more functions.
+    """
+    try:
+        from .similarity import similarity_engine
+        from .cache import decompile_cache
+        from .auto_annotator import match_function
+        adapter = get_adapter(session_id)
+
+        # Get decompiled code (cached or fresh)
+        cache_key = f"{session_id}:decomp:{address}"
+        code = decompile_cache.get(cache_key)
+        if not code:
+            code = await adapter.decompile_function(address)
+            if code:
+                decompile_cache.set(cache_key, code)
+        if not code or len(code) < 20:
+            return {"error_message": "Could not decompile function at " + address}
+
+        suggestions = []
+
+        # 1. Check known patterns
+        known_matches = match_function(code)
+        for m in known_matches[:3]:
+            suggestions.append({
+                "name": m["label"],
+                "source": "known_pattern",
+                "category": m["category"],
+                "confidence": round(m["confidence"], 2)
+            })
+
+        # 2. Check learned patterns (similarity)
+        sim_results = similarity_engine.find_similar(code, top_k=top_k, threshold=0.4)
+        for r in sim_results:
+            if r["name"] and not r["name"].startswith("sub_") and not r["name"].startswith("FUN_"):
+                suggestions.append({
+                    "name": r["name"],
+                    "source": f"similar_function@{r['address']}",
+                    "binary": r.get("binary", ""),
+                    "confidence": round(r["similarity"], 2)
+                })
+
+        # Deduplicate and sort
+        seen = set()
+        unique = []
+        for s in suggestions:
+            if s["name"] not in seen:
+                seen.add(s["name"])
+                unique.append(s)
+        unique.sort(key=lambda x: x["confidence"], reverse=True)
+
+        return {
+            "address": address,
+            "suggestions": unique[:top_k],
+            "total_indexed": similarity_engine.index_count()
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 13. VULNERABILITY SCANNER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def vuln_scan(session_id: str, limit: int = 100) -> Any:
+    """
+    Scan decompiled functions for security vulnerabilities.
+    Checks for: buffer overflows, format strings, use-after-free,
+    integer overflows, hardcoded secrets, command injection, and more.
+    Returns a severity-ranked report with code snippets.
+    """
+    try:
+        from .vuln_scanner import scan_function, generate_report
+        from .cache import decompile_cache
+        adapter = get_adapter(session_id)
+
+        funcs = await adapter.list_functions(offset=0, limit=limit)
+        if not funcs:
+            return {"error_message": "No functions found"}
+
+        all_findings = []
+
+        # Try batch decompile for speed
+        addresses = [f.get("address", "") for f in funcs if f.get("address")]
+        decompiled = {}
+
+        if hasattr(adapter, 'batch_decompile'):
+            try:
+                batch = await adapter.batch_decompile(addresses[:limit])
+                if isinstance(batch, dict):
+                    decompiled = batch
+            except Exception:
+                pass
+
+        for func in funcs:
+            addr = func.get("address", "")
+            name = func.get("name", "")
+            code = decompiled.get(addr)
+
+            if not code:
+                cache_key = f"{session_id}:decomp:{addr}"
+                code = decompile_cache.get(cache_key)
+                if not code:
+                    try:
+                        code = await adapter.decompile_function(addr)
+                        if code:
+                            decompile_cache.set(cache_key, code)
+                    except Exception:
+                        continue
+
+            if code:
+                findings = scan_function(name, addr, code)
+                all_findings.extend(findings)
+
+        report = generate_report(all_findings)
+        return report
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14. CACHE MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def cache_stats() -> str:
+    """
+    View cache statistics: size, hit rate, and TTL for all caches.
+    Useful for monitoring performance and diagnosing slowness.
+    """
+    try:
+        from .cache import decompile_cache, function_cache, disasm_cache
+        lines = ["=== NexusRE Cache Statistics ===\n"]
+        for name, cache in [("Decompile", decompile_cache), ("Function", function_cache), ("Disasm", disasm_cache)]:
+            stats = cache.stats()
+            lines.append(f"  {name} Cache:")
+            lines.append(f"    Size:     {stats['size']} / {stats['max_size']}")
+            lines.append(f"    Hit Rate: {stats['hit_rate']}")
+            lines.append(f"    Hits:     {stats['hits']}")
+            lines.append(f"    Misses:   {stats['misses']}")
+            lines.append(f"    TTL:      {stats['ttl_seconds']}s")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+def cache_clear(cache_name: str = "all") -> str:
+    """
+    Clear cached data. Options: 'all', 'decompile', 'function', 'disasm'.
+    Use when you suspect stale data after re-analyzing or reloading a binary.
+    """
+    try:
+        from .cache import decompile_cache, function_cache, disasm_cache
+        caches = {
+            "decompile": decompile_cache,
+            "function": function_cache,
+            "disasm": disasm_cache
+        }
+        if cache_name == "all":
+            for c in caches.values():
+                c.clear()
+            return "All caches cleared."
+        elif cache_name in caches:
+            caches[cache_name].clear()
+            return f"{cache_name} cache cleared."
+        else:
+            return f"Unknown cache: {cache_name}. Options: all, decompile, function, disasm"
+    except Exception as e:
+        return handle_error(e)
