@@ -1353,7 +1353,6 @@ async def dump_vtables(session_id: str, module_base: str) -> Any:
                 }
             ]
         }
-        }
     except Exception as e:
         return handle_error(e)
 
