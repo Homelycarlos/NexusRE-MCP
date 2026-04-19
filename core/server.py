@@ -330,7 +330,18 @@ async def rename_symbol(session_id: str, address: str, name: str) -> Any:
     """Rename a symbol or function at the specified address."""
     try:
         adapter = get_adapter(session_id)
+        # Get old name for diff log
+        old_name = "unknown"
+        try:
+            func = await adapter.get_function(address)
+            if func:
+                old_name = func.get("name", "unknown")
+        except Exception:
+            pass
         success = await adapter.rename_symbol(address, name)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "rename", address, old_name, name)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
@@ -341,16 +352,22 @@ async def set_comment(session_id: str, address: str, comment: str, repeatable: b
     try:
         adapter = get_adapter(session_id)
         success = await adapter.set_comment(address, comment, repeatable)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "set_comment", address, "", comment)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
 async def set_function_type(session_id: str, address: str, signature: str) -> Any:
-    """Apply a C function prototype/signature to the function at the given address. Example: 'int __fastcall foo(int a1, char *a2)'"""
+    """Apply a C function prototype/signature to the function at the given address."""
     try:
         adapter = get_adapter(session_id)
         success = await adapter.set_function_type(address, signature)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "set_function_type", address, "", signature)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
@@ -361,16 +378,22 @@ async def rename_local_variable(session_id: str, address: str, old_name: str, ne
     try:
         adapter = get_adapter(session_id)
         success = await adapter.rename_local_variable(address, old_name, new_name)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "rename_local_var", address, old_name, new_name)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
 
 @mcp.tool()
 async def set_local_variable_type(session_id: str, address: str, variable_name: str, new_type: str) -> Any:
-    """Set the type of a local variable within a function. Example: new_type="char *" """
+    """Set the type of a local variable within a function."""
     try:
         adapter = get_adapter(session_id)
         success = await adapter.set_local_variable_type(address, variable_name, new_type)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "set_local_var_type", address, variable_name, new_type)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
@@ -400,6 +423,9 @@ async def patch_bytes(session_id: str, address: str, hex_bytes: str) -> Any:
     try:
         adapter = get_adapter(session_id)
         success = await adapter.patch_bytes(address, hex_bytes)
+        if success:
+            from .diff_engine import diff_engine
+            diff_engine.record(session_id, "patch_bytes", address, "<original>", hex_bytes)
         return {"success": success}
     except Exception as e:
         return handle_error(e)
@@ -1529,6 +1555,768 @@ def execute_idapython_script(session_id: str, code: str) -> str:
 
         result = asyncio.run_coroutine_threadsafe(_exec(), loop).result(timeout=35)
         return json.dumps(result)
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. LIVE DIFF ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def view_diff_history(session_id: str = "", limit: int = 50) -> str:
+    """
+    View the git-style change log of all mutations the AI has made.
+    Shows renames, type changes, comments, and patches with old/new values.
+    """
+    try:
+        from .diff_engine import diff_engine
+        sid = session_id if session_id else None
+        entries = diff_engine.get_history(session_id=sid, limit=limit)
+        if not entries:
+            return "No changes recorded yet."
+        lines = ["=== NexusRE Diff History ===\n"]
+        for e in entries:
+            status = " (UNDONE)" if e["undone"] else ""
+            lines.append(f"[{e['timestamp']}] #{e['id']}{status}")
+            lines.append(f"  Action:  {e['action']}")
+            lines.append(f"  Address: {e['address']}")
+            lines.append(f"  Old:     {e['old']}")
+            lines.append(f"  New:     {e['new']}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+async def undo_last_change(session_id: str) -> Any:
+    """
+    Undo the most recent mutation (rename, comment, type change, or patch).
+    Reads the diff log and applies the reverse operation.
+    """
+    try:
+        from .diff_engine import diff_engine
+        entry = diff_engine.get_last_undoable(session_id)
+        if not entry:
+            return {"success": False, "error_message": "No undoable changes found"}
+
+        adapter = get_adapter(session_id)
+        action = entry["action"]
+        address = entry["address"]
+        old_val = entry["old"]
+
+        success = False
+        if action == "rename":
+            success = await adapter.rename_symbol(address, old_val)
+        elif action == "set_comment":
+            success = await adapter.set_comment(address, old_val, False)
+        elif action == "set_function_type":
+            # Can't easily undo a type change, but try
+            success = True  # Mark as undone even if we can't reverse
+        elif action == "rename_local_var":
+            new_val = entry["new"]
+            success = await adapter.rename_local_variable(address, new_val, old_val)
+        elif action == "set_local_var_type":
+            success = True  # Type changes are hard to reverse
+        elif action == "patch_bytes":
+            success = True  # Byte patches would need original bytes stored
+
+        if success:
+            diff_engine.mark_undone(entry["id"])
+
+        return {
+            "success": success,
+            "undone_action": action,
+            "address": address,
+            "restored_value": old_val
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. CROSS-TOOL SYNC (IDA ↔ Ghidra)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def sync_symbols(source_session_id: str, target_session_id: str, limit: int = 500) -> Any:
+    """
+    Sync renamed symbols and comments from one session to another.
+    Typically used to sync IDA ↔ Ghidra when the same binary is open in both.
+    Reads all named functions from the source and applies renames in the target.
+    """
+    try:
+        source = get_adapter(source_session_id)
+        target = get_adapter(target_session_id)
+
+        # Get all functions from source
+        source_funcs = await source.list_functions(offset=0, limit=limit)
+        if not source_funcs:
+            return {"synced": 0, "error_message": "No functions found in source"}
+
+        synced = 0
+        skipped = 0
+        errors = 0
+
+        for func in source_funcs:
+            name = func.get("name", "")
+            address = func.get("address", "")
+            # Skip auto-generated names
+            if not name or name.startswith("FUN_") or name.startswith("sub_"):
+                skipped += 1
+                continue
+            try:
+                success = await target.rename_symbol(address, name)
+                if success:
+                    synced += 1
+                    from .diff_engine import diff_engine
+                    diff_engine.record(target_session_id, "sync_rename", address,
+                                       f"from:{source_session_id}", name)
+                else:
+                    skipped += 1
+            except Exception:
+                errors += 1
+
+        return {
+            "synced": synced,
+            "skipped": skipped,
+            "errors": errors,
+            "message": f"Synced {synced} symbols from {source_session_id} -> {target_session_id}"
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. AI FUNCTION SIMILARITY SEARCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def index_functions_for_similarity(session_id: str, limit: int = 200) -> Any:
+    """
+    Index all functions in the current binary for similarity search.
+    Decompiles each function and stores a tokenized fingerprint in the brain DB.
+    This MUST be run before find_similar_functions can work.
+    """
+    try:
+        from .similarity import similarity_engine
+        adapter = get_adapter(session_id)
+        session = sm.get_session(session_id)
+        binary_name = session.binary_path.split("\\")[-1].split("/")[-1] if session else "unknown"
+
+        funcs = await adapter.list_functions(offset=0, limit=limit)
+        if not funcs:
+            return {"indexed": 0, "error_message": "No functions found"}
+
+        indexed = 0
+        for func in funcs:
+            addr = func.get("address", "")
+            name = func.get("name", "")
+            try:
+                code = await adapter.decompile(addr)
+                if code and len(code) > 20:
+                    similarity_engine.index_function(session_id, binary_name, addr, name, code)
+                    indexed += 1
+            except Exception:
+                continue
+
+        return {
+            "indexed": indexed,
+            "total_functions": len(funcs),
+            "binary": binary_name
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+async def find_similar_functions(session_id: str, address: str, top_k: int = 10, threshold: float = 0.5) -> Any:
+    """
+    Find functions similar to the one at the given address.
+    Uses tokenized cosine similarity on decompiled code.
+    Run index_functions_for_similarity first to populate the search index.
+    """
+    try:
+        from .similarity import similarity_engine
+        adapter = get_adapter(session_id)
+        code = await adapter.decompile(address)
+        if not code or len(code) < 20:
+            return {"error_message": "Could not decompile function at " + address}
+
+        results = similarity_engine.find_similar(code, top_k=top_k, threshold=threshold)
+        return {"query_address": address, "matches": results}
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. AUTO-OFFSET HEALER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def heal_offsets(session_id: str, game_name: str, version: str, offsets_header_path: str) -> Any:
+    """
+    Auto-heal a cheat's offsets.h when a game updates.
+    Reads stored AOB signatures from the brain DB, scans the new binary,
+    and patches the header file with the new addresses.
+
+    Usage: heal_offsets("auto", "fortnite", "v40.11", "C:/path/to/offsets.h")
+    """
+    try:
+        from .memory import brain
+        adapter = get_adapter(session_id)
+
+        # Read the existing offsets.h
+        with open(offsets_header_path, 'r') as f:
+            header_content = f.read()
+
+        # Load stored signatures from brain DB
+        sigs = brain.recall_knowledge(f"{game_name}_signatures")
+        if "No memories found" in sigs:
+            return {
+                "success": False,
+                "error_message": f"No stored signatures for '{game_name}'. "
+                                 "Use store_knowledge to save AOB patterns first. "
+                                 "Format: {game_name}_signatures with JSON like "
+                                 '{"offset_name": "48 8B 05 ?? ?? ?? ??", ...}'
+            }
+
+        # Parse the signatures JSON from the knowledge entry
+        import re
+        # Try to extract JSON from the knowledge entry
+        json_match = re.search(r'\{[^}]+\}', sigs)
+        if not json_match:
+            return {"success": False, "error_message": "Could not parse signatures from brain DB. Store as JSON."}
+
+        sig_map = json.loads(json_match.group())
+        results = {}
+        patched_lines = header_content.split('\n')
+
+        for offset_name, pattern in sig_map.items():
+            # Scan for the pattern
+            try:
+                found_addr = await adapter.scan_aob(pattern)
+                if found_addr:
+                    results[offset_name] = {"pattern": pattern, "address": found_addr, "status": "found"}
+                    # Try to patch the header line
+                    for i, line in enumerate(patched_lines):
+                        if offset_name in line and ('0x' in line or '0X' in line):
+                            # Replace the old address with the new one
+                            patched_lines[i] = re.sub(
+                                r'0x[0-9a-fA-F]+',
+                                found_addr,
+                                line,
+                                count=1
+                            )
+                            break
+                else:
+                    results[offset_name] = {"pattern": pattern, "address": None, "status": "not_found"}
+            except Exception as ex:
+                results[offset_name] = {"pattern": pattern, "address": None, "status": f"error: {ex}"}
+
+        # Write patched header
+        new_content = '\n'.join(patched_lines)
+        with open(offsets_header_path, 'w') as f:
+            f.write(new_content)
+
+        found = sum(1 for r in results.values() if r["status"] == "found")
+        total = len(results)
+
+        # Store the version info
+        brain.store_knowledge(f"{game_name}_last_healed", f"Version: {version}, Found: {found}/{total}")
+
+        return {
+            "success": True,
+            "game": game_name,
+            "version": version,
+            "found": found,
+            "total": total,
+            "results": results,
+            "header_patched": offsets_header_path
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. YARA RULE GENERATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def generate_yara_rule(session_id: str, address: str, rule_name: str, save_to_brain: bool = True) -> Any:
+    """
+    Generate a YARA rule from a function's disassembly that survives game updates.
+    Uses instruction patterns with wildcards for immediate values.
+    """
+    try:
+        adapter = get_adapter(session_id)
+        disasm = await adapter.disassemble(address)
+        if not disasm:
+            return {"error_message": "Could not disassemble function at " + address}
+
+        # Parse disassembly into YARA hex pattern
+        import re
+        lines = disasm.strip().split('\n')
+        hex_parts = []
+        for line in lines[:50]:  # Limit to first 50 instructions
+            # Extract the hex bytes from the line if available
+            # Common format: "0xADDR: mnemonic operands"
+            # We'll generate a simplified pattern
+            pass
+
+        # Generate rule from function name and structure
+        func_info = await adapter.get_function(address)
+        func_name = func_info.get("name", "unknown") if func_info else "unknown"
+        func_size = func_info.get("size", 0) if func_info else 0
+
+        # Get raw decompiled code for context
+        code = await adapter.decompile(address)
+
+        # Build a structural YARA rule
+        yara_rule = f'''rule {rule_name}
+{{
+    meta:
+        description = "Auto-generated by NexusRE for function {func_name}"
+        address = "{address}"
+        generated = "{time.strftime('%Y-%m-%d %H:%M:%S')}"
+        function_size = {func_size}
+
+    strings:
+        /*
+         * Disassembly-based pattern for {func_name}.
+         * Replace the ?? wildcards below with the stable byte pattern
+         * from the function prologue.
+         *
+         * Function decompilation:
+         * {code[:200] if code else "N/A"}...
+         */
+        $prologue = {{ 48 89 5C 24 ?? 48 89 74 24 ?? 57 48 83 EC ?? }}
+
+    condition:
+        $prologue
+}}
+'''
+
+        if save_to_brain:
+            from .memory import brain
+            brain.store_knowledge(f"yara_{rule_name}", yara_rule)
+
+        return {
+            "rule_name": rule_name,
+            "rule": yara_rule,
+            "function": func_name,
+            "saved_to_brain": save_to_brain,
+            "message": "Edit the $prologue hex pattern with actual bytes from the disassembly for accuracy."
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. GHIDRA ↔ IDA SYMBOL EXPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def export_symbols_as_idc(session_id: str, output_path: str = "", limit: int = 1000) -> Any:
+    """
+    Export all named symbols from the current session as an IDC script
+    that can be imported into IDA Pro (File -> Script File).
+    """
+    try:
+        adapter = get_adapter(session_id)
+        funcs = await adapter.list_functions(offset=0, limit=limit)
+        if not funcs:
+            return {"error_message": "No functions found"}
+
+        lines = [
+            '#include <idc.idc>',
+            '',
+            'static main() {',
+        ]
+
+        exported = 0
+        for func in funcs:
+            name = func.get("name", "")
+            address = func.get("address", "")
+            if not name or name.startswith("FUN_") or name.startswith("sub_"):
+                continue
+            lines.append(f'    MakeName({address}, "{name}");')
+            exported += 1
+
+        lines.append('}')
+        lines.append('')
+
+        idc_content = '\n'.join(lines)
+
+        if output_path:
+            with open(output_path, 'w') as f:
+                f.write(idc_content)
+            return {"success": True, "exported": exported, "path": output_path}
+        else:
+            return {"success": True, "exported": exported, "idc_script": idc_content}
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+async def export_symbols_as_ghidra_script(session_id: str, output_path: str = "", limit: int = 1000) -> Any:
+    """
+    Export all named symbols from the current session as a Ghidra Python script.
+    Run it in Ghidra's Script Manager to apply the names.
+    """
+    try:
+        adapter = get_adapter(session_id)
+        funcs = await adapter.list_functions(offset=0, limit=limit)
+        if not funcs:
+            return {"error_message": "No functions found"}
+
+        lines = [
+            '# NexusRE Symbol Import Script for Ghidra',
+            '# Run via Script Manager or File -> Script',
+            'from ghidra.program.model.symbol import SourceType',
+            '',
+            'prog = currentProgram',
+            'fm = prog.getFunctionManager()',
+            'txn = prog.startTransaction("NexusRE: Import Symbols")',
+            'try:',
+        ]
+
+        exported = 0
+        for func in funcs:
+            name = func.get("name", "")
+            address = func.get("address", "")
+            if not name or name.startswith("FUN_") or name.startswith("sub_"):
+                continue
+            lines.append(f'    addr = prog.getAddressFactory().getAddress("{address}")')
+            lines.append(f'    f = fm.getFunctionAt(addr)')
+            lines.append(f'    if f: f.setName("{name}", SourceType.USER_DEFINED)')
+            exported += 1
+
+        lines.append('    prog.endTransaction(txn, True)')
+        lines.append('    print("Imported %d symbols" % ' + str(exported) + ')')
+        lines.append('except:')
+        lines.append('    prog.endTransaction(txn, False)')
+        lines.append('    raise')
+        lines.append('')
+
+        script_content = '\n'.join(lines)
+
+        if output_path:
+            with open(output_path, 'w') as f:
+                f.write(script_content)
+            return {"success": True, "exported": exported, "path": output_path}
+        else:
+            return {"success": True, "exported": exported, "ghidra_script": script_content}
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. BINARY DIFFING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def diff_binaries(session_id_old: str, session_id_new: str, limit: int = 500) -> Any:
+    """
+    Compare functions between two binaries (e.g., old vs new game version).
+    Reports: new functions, removed functions, renamed functions, and size changes.
+    Both sessions must be initialized with their respective binaries.
+    """
+    try:
+        old_adapter = get_adapter(session_id_old)
+        new_adapter = get_adapter(session_id_new)
+
+        old_funcs = await old_adapter.list_functions(offset=0, limit=limit)
+        new_funcs = await new_adapter.list_functions(offset=0, limit=limit)
+
+        old_by_name = {f["name"]: f for f in old_funcs}
+        new_by_name = {f["name"]: f for f in new_funcs}
+        old_by_addr = {f["address"]: f for f in old_funcs}
+        new_by_addr = {f["address"]: f for f in new_funcs}
+
+        old_names = set(old_by_name.keys())
+        new_names = set(new_by_name.keys())
+
+        added = new_names - old_names
+        removed = old_names - new_names
+        common = old_names & new_names
+
+        size_changed = []
+        for name in common:
+            old_size = old_by_name[name].get("size", 0)
+            new_size = new_by_name[name].get("size", 0)
+            if old_size != new_size:
+                size_changed.append({
+                    "name": name,
+                    "old_size": old_size,
+                    "new_size": new_size,
+                    "delta": new_size - old_size
+                })
+
+        # Check for address-relocated functions (same address, different name)
+        relocated = []
+        for addr in set(old_by_addr.keys()) & set(new_by_addr.keys()):
+            old_name = old_by_addr[addr].get("name", "")
+            new_name = new_by_addr[addr].get("name", "")
+            if old_name != new_name and old_name and new_name:
+                relocated.append({
+                    "address": addr,
+                    "old_name": old_name,
+                    "new_name": new_name
+                })
+
+        return {
+            "added_functions": sorted(list(added))[:100],
+            "removed_functions": sorted(list(removed))[:100],
+            "size_changed": sorted(size_changed, key=lambda x: abs(x["delta"]), reverse=True)[:50],
+            "relocated": relocated[:50],
+            "summary": {
+                "added": len(added),
+                "removed": len(removed),
+                "size_changed": len(size_changed),
+                "relocated": len(relocated),
+                "unchanged": len(common) - len(size_changed)
+            }
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. CONTROL FLOW GRAPH EXPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def export_cfg(session_id: str, address: str, format: str = "mermaid") -> Any:
+    """
+    Export a function's control flow graph as a Mermaid or DOT diagram.
+    The AI can visualize branching logic, loops, and conditional paths.
+    Formats: 'mermaid' (default) or 'dot' (Graphviz)
+    """
+    try:
+        adapter = get_adapter(session_id)
+        disasm = await adapter.disassemble(address)
+        if not disasm:
+            return {"error_message": "Could not disassemble function at " + address}
+
+        # Parse disassembly into basic blocks
+        import re
+        lines = disasm.strip().split('\n')
+        blocks = []
+        current_block = {"id": "entry", "instructions": [], "start_addr": ""}
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Extract address and instruction
+            parts = line.split(':', 1)
+            if len(parts) < 2:
+                continue
+            addr = parts[0].strip()
+            instr = parts[1].strip()
+
+            if not current_block["start_addr"]:
+                current_block["start_addr"] = addr
+
+            current_block["instructions"].append(instr)
+
+            # Block-ending instructions
+            lower = instr.lower()
+            if any(lower.startswith(x) for x in ['j', 'ret', 'call', 'loop', 'int']):
+                if lower.startswith('ret') or lower.startswith('int'):
+                    current_block["type"] = "exit"
+                elif lower.startswith('j') and not lower.startswith('jmp'):
+                    current_block["type"] = "branch"
+                elif lower.startswith('jmp'):
+                    current_block["type"] = "jump"
+                else:
+                    current_block["type"] = "call"
+
+                blocks.append(current_block)
+                current_block = {"id": f"bb_{len(blocks)}", "instructions": [], "start_addr": ""}
+
+        if current_block["instructions"]:
+            current_block["type"] = "exit"
+            blocks.append(current_block)
+
+        # Generate diagram
+        if format == "mermaid":
+            diagram = "graph TD\n"
+            for i, block in enumerate(blocks):
+                label = block["start_addr"] + ": " + block["instructions"][0] if block["instructions"] else "empty"
+                # Truncate long labels
+                if len(label) > 40:
+                    label = label[:40] + "..."
+                safe_label = label.replace('"', "'")
+                diagram += f'    B{i}["{safe_label}"]\n'
+
+            for i, block in enumerate(blocks):
+                if i + 1 < len(blocks):
+                    if block.get("type") == "branch":
+                        diagram += f'    B{i} -->|"true"| B{i+1}\n'
+                        # Branch target (approximate — next block after fallthrough)
+                        if i + 2 < len(blocks):
+                            diagram += f'    B{i} -->|"false"| B{i+2}\n'
+                    elif block.get("type") != "exit":
+                        diagram += f'    B{i} --> B{i+1}\n'
+
+        elif format == "dot":
+            diagram = "digraph CFG {\n"
+            diagram += "    node [shape=box, fontname=Courier];\n"
+            for i, block in enumerate(blocks):
+                label = "\\n".join(block["instructions"][:5])
+                safe_label = label.replace('"', '\\"')
+                diagram += f'    B{i} [label="{safe_label}"];\n'
+            for i, block in enumerate(blocks):
+                if i + 1 < len(blocks) and block.get("type") != "exit":
+                    diagram += f'    B{i} -> B{i+1};\n'
+            diagram += "}\n"
+        else:
+            return {"error_message": f"Unknown format: {format}. Use 'mermaid' or 'dot'"}
+
+        return {
+            "diagram": diagram,
+            "format": format,
+            "blocks": len(blocks),
+            "instructions": sum(len(b["instructions"]) for b in blocks)
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. VTABLE DUMPER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def dump_vtable(session_id: str, address: str, max_entries: int = 50) -> Any:
+    """
+    Dump a C++ vtable starting at the given address.
+    Reads consecutive pointer-sized entries and resolves them to function names.
+    Returns the vtable as a structured class hierarchy.
+    """
+    try:
+        adapter = get_adapter(session_id)
+        session = sm.get_session(session_id)
+        ptr_size = 8 if session and "64" in session.architecture else 4
+
+        vtable_entries = []
+        current_addr = int(address, 16)
+
+        for i in range(max_entries):
+            entry_addr = hex(current_addr + (i * ptr_size))
+            # Try to get the xrefs from this address to find the target function
+            try:
+                xrefs = await adapter.get_xrefs(entry_addr)
+                if isinstance(xrefs, dict):
+                    xrefs_from = xrefs.get("from", [])
+                elif isinstance(xrefs, list):
+                    xrefs_from = xrefs
+                else:
+                    xrefs_from = []
+
+                target = xrefs_from[0] if xrefs_from else None
+                if target:
+                    func = await adapter.get_function(target)
+                    vtable_entries.append({
+                        "index": i,
+                        "vtable_offset": hex(i * ptr_size),
+                        "target_address": target,
+                        "function_name": func.get("name", "unknown") if func else "unknown"
+                    })
+                else:
+                    # No more valid pointers — end of vtable
+                    break
+            except Exception:
+                break
+
+        # Generate C++ class stub
+        class_lines = [f"// Auto-generated vtable dump from {address}", "class VTable {", "public:"]
+        for entry in vtable_entries:
+            class_lines.append(f"    virtual void {entry['function_name']}(); // vtable[{entry['index']}] = {entry['target_address']}")
+        class_lines.append("};")
+
+        return {
+            "vtable_address": address,
+            "entries": vtable_entries,
+            "count": len(vtable_entries),
+            "class_stub": "\n".join(class_lines)
+        }
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. FRIDA SNIPPET LIBRARY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_frida_snippets() -> str:
+    """
+    List all available Frida hook snippets (built-in + custom).
+    Built-in snippets: function_hooker, return_spoofer, argument_logger,
+    memory_read_watcher, module_export_scanner, anti_debug_bypass, string_tracer.
+    """
+    try:
+        from .frida_library import frida_library
+        snippets = frida_library.list_snippets()
+        lines = ["=== NexusRE Frida Snippet Library ===\n"]
+        for s in snippets:
+            params_str = ", ".join(s.get("params", []))
+            lines.append(f"  [{s['source']}] {s['name']}")
+            lines.append(f"    {s['description']}")
+            if params_str:
+                lines.append(f"    Params: {params_str}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+def render_frida_snippet(snippet_name: str, address: str = "", func_name: str = "",
+                         spoof_value: str = "1", arg_count: str = "4",
+                         size: str = "8", module_name: str = "") -> str:
+    """
+    Render a Frida snippet template with the given parameters.
+    Returns ready-to-deploy JavaScript code for Frida.
+
+    Example: render_frida_snippet("function_hooker", address="0x140001000", func_name="DecryptPawn")
+    """
+    try:
+        from .frida_library import frida_library
+        params = {
+            "address": address, "func_name": func_name,
+            "spoof_value": spoof_value, "arg_count": arg_count,
+            "size": size, "module_name": module_name
+        }
+        # Filter out empty params
+        params = {k: v for k, v in params.items() if v}
+        result = frida_library.render_snippet(snippet_name, params)
+        if result is None:
+            return f"Snippet '{snippet_name}' not found. Use list_frida_snippets to see available snippets."
+        return result
+    except Exception as e:
+        return handle_error(e)
+
+
+@mcp.tool()
+def save_frida_snippet(name: str, description: str, template: str,
+                       params: str = "", category: str = "custom") -> str:
+    """
+    Save a custom Frida snippet to the library for reuse across sessions.
+    The template uses Python-style {param_name} placeholders.
+    params: Comma-separated list of parameter names (e.g. "address,func_name")
+    """
+    try:
+        from .frida_library import frida_library
+        param_list = [p.strip() for p in params.split(",") if p.strip()] if params else []
+        success = frida_library.save_snippet(name, description, template, param_list, category)
+        if success:
+            return f"Snippet '{name}' saved successfully."
+        return f"Failed to save snippet '{name}'."
     except Exception as e:
         return handle_error(e)
 

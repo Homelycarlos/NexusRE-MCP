@@ -231,6 +231,146 @@ class TestBrainMemory:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Diff Engine Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDiffEngine:
+    """Test the Live Diff Engine tracking and undo."""
+
+    def _get_engine(self, tmp_path):
+        from core.diff_engine import DiffEngine
+        return DiffEngine(db_path=str(tmp_path / "test_diff.db"))
+
+    def test_record_and_history(self, tmp_path):
+        engine = self._get_engine(tmp_path)
+        engine.record("s1", "rename", "0x1000", "sub_1000", "main")
+        history = engine.get_history(session_id="s1")
+        assert len(history) == 1
+        assert history[0]["action"] == "rename"
+        assert history[0]["old"] == "sub_1000"
+        assert history[0]["new"] == "main"
+
+    def test_undo_marks_entry(self, tmp_path):
+        engine = self._get_engine(tmp_path)
+        engine.record("s1", "rename", "0x2000", "foo", "bar")
+        entry = engine.get_last_undoable("s1")
+        assert entry is not None
+        assert entry["old"] == "foo"
+        engine.mark_undone(entry["id"])
+        entry2 = engine.get_last_undoable("s1")
+        assert entry2 is None  # No more undoable entries
+
+    def test_multiple_records(self, tmp_path):
+        engine = self._get_engine(tmp_path)
+        engine.record("s1", "rename", "0x1000", "a", "b")
+        engine.record("s1", "set_comment", "0x2000", "", "hello")
+        engine.record("s1", "patch_bytes", "0x3000", "", "90 90")
+        history = engine.get_history(session_id="s1")
+        assert len(history) == 3
+        # Newest first
+        assert history[0]["action"] == "patch_bytes"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Similarity Engine Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSimilarityEngine:
+    """Test function similarity search."""
+
+    def _get_engine(self, tmp_path):
+        from core.similarity import SimilarityEngine
+        return SimilarityEngine(db_path=str(tmp_path / "test_sim.db"))
+
+    def test_tokenize(self):
+        from core.similarity import _tokenize
+        tokens = _tokenize("int main() { return 0; }")
+        assert "int" in tokens
+        assert "main" in tokens
+        assert "return" in tokens
+
+    def test_cosine_self_similarity(self):
+        from core.similarity import _cosine_similarity
+        tokens = ["int", "main", "return", "int"]
+        sim = _cosine_similarity(tokens, tokens)
+        assert sim == pytest.approx(1.0)
+
+    def test_cosine_different(self):
+        from core.similarity import _cosine_similarity
+        a = ["mov", "rax", "rbx"]
+        b = ["push", "rbp", "sub", "rsp"]
+        sim = _cosine_similarity(a, b)
+        assert sim < 0.5
+
+    def test_index_and_find(self, tmp_path):
+        engine = self._get_engine(tmp_path)
+        code1 = "int decrypt(char *buf, int len) { for(int i=0; i<len; i++) buf[i] ^= 0x42; return len; }"
+        code2 = "int encrypt(char *data, int size) { for(int j=0; j<size; j++) data[j] ^= 0x42; return size; }"
+        code3 = "void render_frame() { glClear(GL_COLOR_BUFFER_BIT); draw_scene(); swap_buffers(); }"
+
+        engine.index_function("s1", "test.exe", "0x1000", "decrypt", code1)
+        engine.index_function("s1", "test.exe", "0x2000", "encrypt", code2)
+        engine.index_function("s1", "test.exe", "0x3000", "render", code3)
+
+        results = engine.find_similar(code1, threshold=0.3)
+        assert len(results) >= 2
+        # The most similar should be decrypt itself (1.0) or encrypt (high)
+        assert results[0]["similarity"] >= 0.8
+
+    def test_index_count(self, tmp_path):
+        engine = self._get_engine(tmp_path)
+        assert engine.index_count() == 0
+        engine.index_function("s1", "test.exe", "0x1000", "f1", "void f1() { return; }")
+        assert engine.index_count() == 1
+        assert engine.index_count("test.exe") == 1
+        assert engine.index_count("other.exe") == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Frida Library Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFridaLibrary:
+    """Test the Frida snippet library."""
+
+    def _get_library(self, tmp_path):
+        from core.frida_library import FridaLibrary
+        return FridaLibrary(db_path=str(tmp_path / "test_frida.db"))
+
+    def test_builtin_snippets_exist(self):
+        from core.frida_library import BUILTIN_SNIPPETS
+        assert "function_hooker" in BUILTIN_SNIPPETS
+        assert "return_spoofer" in BUILTIN_SNIPPETS
+        assert "anti_debug_bypass" in BUILTIN_SNIPPETS
+        assert len(BUILTIN_SNIPPETS) >= 7
+
+    def test_render_builtin(self, tmp_path):
+        lib = self._get_library(tmp_path)
+        result = lib.render_snippet("function_hooker", {
+            "address": "0x140001000",
+            "func_name": "DecryptPawn"
+        })
+        assert "0x140001000" in result
+        assert "DecryptPawn" in result
+        assert "Interceptor.attach" in result
+
+    def test_save_and_get_custom(self, tmp_path):
+        lib = self._get_library(tmp_path)
+        lib.save_snippet("my_hook", "Custom hook", "console.log('{address}');", ["address"])
+        snippet = lib.get_snippet("my_hook")
+        assert snippet is not None
+        assert snippet["source"] == "custom"
+        assert snippet["description"] == "Custom hook"
+
+    def test_list_includes_builtins_and_custom(self, tmp_path):
+        lib = self._get_library(tmp_path)
+        lib.save_snippet("custom1", "test", "code", [])
+        all_snippets = lib.list_snippets()
+        sources = [s["source"] for s in all_snippets]
+        assert "builtin" in sources
+        assert "custom" in sources
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Adapter Registry Tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
