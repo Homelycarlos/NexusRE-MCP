@@ -403,8 +403,38 @@ class IdaOperations:
             return exports[offset:]
         return exports[offset:offset+limit]
 
+    @staticmethod
+    def execute_script(script_code):
+        """Execute arbitrary IDAPython code and capture stdout + return value."""
+        import io
+        import contextlib
+        stdout_capture = io.StringIO()
+        local_ns = {
+            "idaapi": idaapi, "idc": idc, "idautils": idautils,
+            "ida_segment": ida_segment, "ida_nalt": ida_nalt, "ida_entry": ida_entry
+        }
+        with contextlib.redirect_stdout(stdout_capture):
+            try:
+                exec(script_code, local_ns)
+            except Exception as e:
+                return {"output": stdout_capture.getvalue(), "error": str(e)}
+        return {"output": stdout_capture.getvalue(), "error": None}
+
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Health-check endpoint."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        try:
+            binary = idaapi.get_input_file_path()
+            status = "ok" if binary else "no_binary"
+        except Exception:
+            status = "stale"
+            binary = ""
+        self.wfile.write(json.dumps({"status": status, "binary": binary or ""}).encode('utf-8'))
+
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
@@ -487,11 +517,20 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = IdaOperations._execute_sync(IdaOperations.read_memory, args.get("address"), args.get("size"))
             elif action == "memory_regions":
                 result = IdaOperations._execute_sync(IdaOperations.memory_regions)
+
+            # ── Script Execution ────────────────────────────────────
+            elif action == "execute_script":
+                result = IdaOperations._execute_sync(IdaOperations.execute_script, args.get("code", ""))
                 
             else:
                 self.send_response(404)
                 self.end_headers()
-                self.wfile.write(b'{"error": "action not found"}')
+                self.wfile.write(b'{"error_message": "action not found"}')
+                return
+
+            # Log the request
+            import time as _time
+            print("[IDA-MCP] %s -> %s" % (action, "ok" if result and "error" not in str(result)[:50] else "err"))
                 return
             
             self.send_response(200)

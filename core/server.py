@@ -73,21 +73,28 @@ def get_adapter(session_id: str):
     else:
         return adapter_cls(session.backend_url)
 
-def _log_command(tool_name: str, args: dict, result: Any):
-    """Append to in-memory audit log for the dashboard."""
+def _log_command(tool_name: str, args: dict, result: Any, session_id: str = None, duration_ms: int = 0):
+    """Append to in-memory audit log and persist to brain DB."""
     _command_log.append({
         "timestamp": time.time(),
         "tool": tool_name,
         "args": args,
-        "success": not isinstance(result, dict) or "error" not in result
+        "success": not isinstance(result, dict) or "error_message" not in result
     })
-    # Keep last 500 entries
+    # Keep last 500 entries in memory
     if len(_command_log) > 500:
         _command_log.pop(0)
+    # Persist to brain DB
+    try:
+        from .memory import brain
+        result_summary = str(result)[:500] if result else ""
+        brain.log_request(session_id or "unknown", tool_name, args or {}, result_summary, duration_ms)
+    except Exception:
+        pass
 
 def handle_error(e: Exception) -> dict:
     logger.error(f"Error executing tool: {e}")
-    return ErrorSchema(message=str(e), code="TOOL_ERROR").model_dump()
+    return ErrorSchema(error_message=str(e), error_code="TOOL_ERROR").model_dump()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Session Management
@@ -1460,3 +1467,68 @@ public:
         }
     except Exception as e:
          return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Request Audit Log
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def view_request_log(limit: int = 50, session_id: str = "") -> str:
+    """
+    View the request audit log. Shows recent tool invocations with timestamps,
+    arguments, results, and execution duration. Useful for debugging and replaying sessions.
+    """
+    try:
+        from .memory import brain
+        sid = session_id if session_id else None
+        entries = brain.get_request_log(limit=limit, session_id=sid)
+        if not entries:
+            return "No request log entries found."
+        lines = [f"=== NexusRE Request Audit Log (last {len(entries)} entries) ===\n"]
+        for e in entries:
+            lines.append(f"[{e['timestamp']}] {e['tool']} ({e['duration_ms']}ms)")
+            lines.append(f"  Args: {e['args']}")
+            lines.append(f"  Result: {e['result'][:200] if e['result'] else 'None'}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return handle_error(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IDAPython Script Execution
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def execute_idapython_script(session_id: str, code: str) -> str:
+    """
+    Execute arbitrary IDAPython code inside IDA Pro and return the captured stdout output.
+    This gives the AI full access to IDA's scripting capabilities.
+    WARNING: This runs raw Python code inside IDA — use responsibly.
+    
+    Args:
+        session_id: Session ID (use 'auto' for default session)
+        code: IDAPython code to execute (e.g. "print(hex(idaapi.get_screen_ea()))")
+    """
+    try:
+        adapter = get_adapter(session_id)
+        if not adapter:
+            return json.dumps({"error_message": "No active session", "error_code": "NO_SESSION"})
+        import asyncio
+        loop = asyncio.get_running_loop()
+
+        async def _exec():
+            import aiohttp
+            session = adapter
+            payload = {"action": "execute_script", "args": {"code": code}}
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as http:
+                async with http.post(f"{session.base_url}/", json=payload) as resp:
+                    return await resp.json()
+
+        result = asyncio.run_coroutine_threadsafe(_exec(), loop).result(timeout=35)
+        return json.dumps(result)
+    except Exception as e:
+        return handle_error(e)
+

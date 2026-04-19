@@ -158,6 +158,85 @@ def auto_install():
 
     sys.exit(0)
 
+def install_plugins():
+    """Auto-detect installed RE tools and copy the corresponding backend plugins."""
+    import shutil
+    import glob
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugins_dir = os.path.join(script_dir, "plugins")
+    installed = 0
+
+    # ── IDA Pro ──
+    ida_targets = []
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        ida_targets.append(os.path.join(appdata, "Hex-Rays", "IDA Pro", "plugins"))
+    for v in ["8.3", "8.4", "9.0"]:
+        ida_targets.append(os.path.join("C:\\", f"IDA Pro {v}", "plugins"))
+        ida_targets.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}", "plugins"))
+
+    for target in ida_targets:
+        if os.path.isdir(target):
+            src = os.path.join(plugins_dir, "ida", "ida_backend_plugin.py")
+            dst = os.path.join(target, "ida_backend_plugin.py")
+            shutil.copy2(src, dst)
+            print(f"[+] IDA Pro: Copied plugin to {target}")
+            installed += 1
+            break
+    else:
+        print("[!] IDA Pro not found. Skipping.")
+
+    # ── Ghidra ──
+    ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR", "")
+    ghidra_targets = []
+    if ghidra_dir:
+        ghidra_targets.append(os.path.join(ghidra_dir, "Ghidra", "Features", "Python", "ghidra_scripts"))
+    home = os.path.expanduser("~")
+    ghidra_targets.append(os.path.join(home, "ghidra_scripts"))
+
+    for target in ghidra_targets:
+        if os.path.isdir(target):
+            src = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
+            dst = os.path.join(target, "ghidra_backend_plugin.py")
+            shutil.copy2(src, dst)
+            print(f"[+] Ghidra: Copied plugin to {target}")
+            installed += 1
+            break
+    else:
+        # Create user scripts dir as fallback
+        fallback = os.path.join(home, "ghidra_scripts")
+        os.makedirs(fallback, exist_ok=True)
+        src = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
+        shutil.copy2(src, os.path.join(fallback, "ghidra_backend_plugin.py"))
+        print(f"[+] Ghidra: Created {fallback} and copied plugin. Add this to Script Manager.")
+        installed += 1
+
+    # ── Binary Ninja ──
+    binja_target = os.path.join(appdata, "Binary Ninja", "plugins") if appdata else ""
+    if binja_target and os.path.isdir(binja_target):
+        src = os.path.join(plugins_dir, "binja", "binja_backend_plugin.py")
+        shutil.copy2(src, os.path.join(binja_target, "binja_backend_plugin.py"))
+        print(f"[+] Binary Ninja: Copied plugin to {binja_target}")
+        installed += 1
+    else:
+        print("[!] Binary Ninja not found. Skipping.")
+
+    # ── Cheat Engine ──
+    for v in ["7.5", "7.4"]:
+        ce_path = os.path.join(os.environ.get("PROGRAMFILES", ""), f"Cheat Engine {v}", "autorun")
+        if os.path.isdir(ce_path):
+            src = os.path.join(plugins_dir, "ce", "ce_backend_plugin.lua")
+            shutil.copy2(src, os.path.join(ce_path, "ce_backend_plugin.lua"))
+            print(f"[+] Cheat Engine: Copied plugin to {ce_path}")
+            installed += 1
+            break
+    else:
+        print("[!] Cheat Engine not found. Skipping.")
+
+    print(f"\n[*] Installed {installed} plugin(s). Restart your RE tools for changes to take effect.")
+    sys.exit(0)
+
 
 def print_help():
     print("""
@@ -165,12 +244,13 @@ NexusRE-MCP Server
 =======================================
 
 Usage:
-  uv run main.py                 Start the MCP server (stdio transport)
-  uv run main.py --config        Print the JSON config for manual setup
-  uv run main.py --install       Auto-detect & inject config into Claude/Cursor
-  uv run main.py --transport sse Start the server with SSE transport (HTTP)
-  uv run main.py --port 8080     Set the SSE server port (default: 8080)
-  uv run main.py --help          Show this help message
+  uv run main.py                    Start the MCP server (stdio transport)
+  uv run main.py --config           Print the JSON config for manual setup
+  uv run main.py --install          Auto-detect & inject config into Claude/Cursor
+  uv run main.py --install-plugins  Auto-copy backend plugins into RE tools
+  uv run main.py --transport sse    Start the server with SSE transport (HTTP)
+  uv run main.py --port 8080        Set the SSE server port (default: 8080)
+  uv run main.py --help             Show this help message
 
 Supported Backends:
   - ida         (Default port: 10101)
@@ -193,6 +273,9 @@ def main_cli():
 
     if "--install" in sys.argv:
         auto_install()
+
+    if "--install-plugins" in sys.argv:
+        install_plugins()
 
     # Determine transport mode
     import time

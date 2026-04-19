@@ -22,12 +22,36 @@ class SessionState(BaseModel):
 
 class SessionManager:
     """
-    Session manager with default-session support.
-    If only one session exists, it is used automatically when no session_id is provided.
+    Session manager with default-session support and SQLite persistence.
+    Sessions survive server restarts via the BrainMemory database.
     """
     def __init__(self):
         self._sessions: Dict[str, SessionState] = {}
         self._default_session: Optional[str] = None
+        self._restore_sessions()
+
+    def _restore_sessions(self):
+        """Restore sessions from the brain DB on startup."""
+        try:
+            from .memory import brain
+            saved = brain.load_all_sessions()
+            for s in saved:
+                state = SessionState(
+                    backend=s["backend"],
+                    binary_path=s["binary_path"],
+                    architecture=s["architecture"],
+                    backend_url=s["backend_url"]
+                )
+                self._sessions[s["session_id"]] = state
+            if len(self._sessions) == 1:
+                self._default_session = next(iter(self._sessions.keys()))
+            if saved:
+                import logging
+                logging.getLogger("NexusRE").info(
+                    f"Restored {len(saved)} session(s) from brain DB"
+                )
+        except Exception:
+            pass  # First run or DB not initialized yet
 
     def create_session(self, session_id: str, backend: str, binary_path: str, architecture: str, backend_url: str = "") -> SessionState:
         if backend not in SUPPORTED_BACKENDS:
@@ -50,6 +74,13 @@ class SessionManager:
         if len(self._sessions) == 1:
             self._default_session = session_id
 
+        # Persist to brain DB
+        try:
+            from .memory import brain
+            brain.save_session(session_id, backend, binary_path, architecture, backend_url)
+        except Exception:
+            pass
+
         return state
 
     def get_session(self, session_id: Optional[str] = None) -> Optional[SessionState]:
@@ -61,6 +92,14 @@ class SessionManager:
             if len(self._sessions) == 1:
                 return next(iter(self._sessions.values()))
             return None
+
+        # Touch last_used timestamp
+        try:
+            from .memory import brain
+            brain.touch_session(session_id)
+        except Exception:
+            pass
+
         return self._sessions.get(session_id)
 
     def resolve_session_id(self, session_id: Optional[str] = None) -> Optional[str]:
@@ -97,5 +136,13 @@ class SessionManager:
             del self._sessions[session_id]
             if self._default_session == session_id:
                 self._default_session = None
+
+            # Remove from brain DB
+            try:
+                from .memory import brain
+                brain.delete_session(session_id)
+            except Exception:
+                pass
+
             return True
         return False

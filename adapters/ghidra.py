@@ -175,3 +175,25 @@ class GhidraAdapter(BaseAdapter):
     async def save_binary(self, output_path: str) -> bool:
         res = await self._call("ghidra_save_binary", {"output_path": output_path})
         return res.get("success", False)
+
+    # ── New v2 Features ───────────────────────────────────────────────────
+
+    async def batch_decompile(self, addresses: List[str]) -> dict:
+        """Decompile multiple functions in a single round-trip."""
+        res = await self._call("ghidra_batch_decompile", {"addresses": addresses})
+        return res.get("results", {})
+
+    async def define_struct(self, name: str, fields: list) -> bool:
+        """Define a C struct in Ghidra's DataTypeManager.
+        Fields: [{"name": "field_name", "type": "int", "offset": 0}, ...]
+        """
+        res = await self._call("ghidra_define_struct", {"name": name, "fields": fields})
+        return res.get("success", False)
+
+    async def scan_aob(self, pattern: str) -> Optional[str]:
+        """Scan for an AOB/signature pattern. Supports ?? wildcards.
+        Example: "48 8B 05 ?? ?? ?? ?? 48 85 C0"
+        """
+        res = await self._call("ghidra_scan_aob", {"pattern": pattern})
+        return res.get("address")
+

@@ -22,9 +22,8 @@ class XrefSchema(BaseModel):
         populate_by_name = True
 
 class ErrorSchema(BaseModel):
-    error: bool = True
-    message: str
-    code: str
+    error_message: str
+    error_code: str
 
 class InstructionSchema(BaseModel):
     """Schema for a single disassembled instruction."""
