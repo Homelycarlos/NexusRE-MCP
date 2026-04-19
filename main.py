@@ -184,7 +184,7 @@ Supported Backends:
     sys.exit(0)
 
 
-if __name__ == "__main__":
+def main_cli():
     if "--help" in sys.argv or "-h" in sys.argv:
         print_help()
 
@@ -254,4 +254,7 @@ if __name__ == "__main__":
     else:
         # Start the fastMCP server via standard CLI execution (stdio)
         mcp.run()
+
+if __name__ == "__main__":
+    main_cli()
 

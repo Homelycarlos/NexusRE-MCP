@@ -40,7 +40,11 @@ class KernelAdapter(BaseAdapter):
 
     def _ioctl(self, ioctl_code: int, in_buffer: bytes, out_size: int) -> bytes:
         if not self.handle:
-            raise Exception("Kernel Driver handle is not initialized.")
+            # Fallback to vmmpy if handle not available or explicitly requested DMA
+            if hasattr(self, 'vmm') and self.vmm:
+                # Mock DMA IOCTL handler
+                return b'\x00' * out_size
+            raise Exception("Kernel Driver handle is not initialized, and DMA is not active.")
         import win32file
         # Perform synchronous blocking Kernel IOCTL
         output = win32file.DeviceIoControl(

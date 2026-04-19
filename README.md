@@ -36,26 +36,45 @@ Usually, a developer writes a Python script for IDA, a Lua script for Cheat Engi
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Setup
 
-Install universally via pip:
+NexusRE MCP is built using modern Python environments management (we strongly recommend using [uv](https://docs.astral.sh/uv/)). 
+
+### Option A: Local Run (Recommended)
+If you have the repository locally, you can use `uv` to automatically manage dependencies and run the server without polluting your global Python registry.
 
 ```bash
-pip install nexusre-mcp[all]
+cd path/to/unified-re-mcp
+
+# To auto-attach NexusRE to your Cursor or Claude Desktop config:
+uv run main.py --install
 ```
 
-### Quick Start
-To attach NexusRE to Cursor or Claude Desktop automatically:
+### Option B: Global Installation
+If you want to use the `nexusre-mcp` command natively from any directory in your terminal, install it as a global package:
+
+```bash
+# Strongly Recommended:
+uv tool install .
+
+# Or via standard pip:
+pip install .[all]
+```
+
+### ⚡ Quick Start (After Global Installation)
+
+**1. Attach to AI Clients**
+If installed globally, you can map the server into Cursor or Claude Desktop with a single command:
 ```bash
 nexusre-mcp --install
 ```
 
-To run the secure network-wide SSE server (with rate limiting and API key auth) so your dev team can connect remotely:
+**2. Network-Wide Secure Server**
+To run the secure SSE server (with API key auth & rate limiting) so your dev team can connect remotely via HTTP:
 ```bash
 set NEXUSRE_API_KEY=your_secret_key
 nexusre-mcp --transport sse --port 8080
 ```
-
 ---
 
 ## 🔌 Supported Backends
