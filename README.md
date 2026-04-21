@@ -29,26 +29,32 @@ You don't need to write separate scripts for every tool you use. NexusRE connect
 
 ---
 
-## 🚀 How to Install
+## 🚀 How to Install (Zero-Dependency)
 
-We recommend using `uv` (it makes running Python stuff way easier and cleaner).
+Our custom installer automatically downloads its own sandboxed Python toolchain (via `uv`) and injects the MCP configuration directly into your IDE. **You do not need Python installed on your system!**
 
-### Option A: Run it from the folder (Recommended)
-If you downloaded this folder directly:
+### Option A: The "One-Click" Batch Files (Windows Only)
+Inside the downloaded folder, you'll find two scripts that automate everything. Simply double-click them (they will automatically request Administrator privileges):
+
+1.  **`inject_mcp_configs.bat`**  
+    Automatically detects and connects the MCP server to **Claude Desktop**, **Cursor**, **Windsurf**, **Kiro IDE**, **Trae IDE**, **Zed IDE**, **Roo Code**, **Cline**, **Claude Code**, and **LM Studio**.
+2.  **`inject_plugins.bat`**  
+    Automatically searches your hard drives for **IDA Pro, Ghidra, x64dbg, Binary Ninja, and Cheat Engine** and instantly drops the backend plugins into their respective directories.
+
+### Option B: Command Line Installer (Mac / Linux)
+If you are on macOS or Linux, you can run the core Python engine directly. We recommend using `uv`:
+
 ```bash
 cd path/to/NexusRE-MCP
-
-# Run this command to automatically connect it to Claude or Cursor:
 uv run main.py --install
 ```
 
-### Option B: Install it globally
-If you want to be able to just type `nexusre-mcp` from anywhere on your computer:
+### Option C: Manual Configuration
+If you use an environment without global configuration files (like **VS Code Workspace**, **Augment Code**, **Qodo Gen**, etc.), simply run:
 ```bash
-# Easy global install:
-uv tool install .
+uv run main.py --config
 ```
-Then, just type `nexusre-mcp --install` to connect it to your AI.
+Then paste the JSON output into your editor's local `.vscode/mcp.json` file.
 
 **(Optional) Share it with your team:**  
 If you want your friends or team to use your server over the internet, run:
@@ -76,7 +82,13 @@ NexusRE connects to backend files in the `adapters/` folder. Right now, it suppo
 
 ## 🛠 Setting up the Backend Plugins
 
-To let NexusRE talk to your specific tools, you need to run a small background plugin in them. Here is how to set up each one:
+To let NexusRE talk to your specific tools, you need to run a small background plugin in them. 
+
+### The Automatic Way (Windows)
+Double-click **`inject_plugins.bat`**. It will automatically find where your tools are installed and inject the plugins for you without you lifting a finger!
+
+### The Manual Way (Mac/Linux or Custom Installs)
+If you need to install them manually, here is how to set up each one from the `plugins/` folder:
 
 ### 🦇 IDA Pro
 1. Find the `ida_backend_plugin.py` file in the `plugins/ida/` folder.
