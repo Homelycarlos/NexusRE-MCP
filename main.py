@@ -56,7 +56,8 @@ def print_config():
     print("Copy the JSON block below and paste it into your MCP client's configuration file:")
     print(" - Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json or ~/Library/Application Support/Claude/claude_desktop_config.json")
     print(" - Cursor / Roo Code / Cline: Add to your MCP settings or workspace mcp.json")
-    print(" - Windsurf / Trae: Follow standard MCP initialization paths.\n")
+    print(" - Windsurf / Trae: Follow standard MCP initialization paths.")
+    print(" - Kiro IDE: ~/.kiro/settings/mcp.json\n")
     print(json.dumps(config, indent=2))
     print("\n=========================================")
     sys.exit(0)
@@ -110,6 +111,14 @@ def _find_cursor_config_paths() -> list:
     return paths
 
 
+def _find_kiro_config_paths() -> list:
+    """Return a list of possible Kiro IDE MCP config file paths on this system."""
+    paths = []
+    home = os.path.expanduser("~")
+    paths.append(os.path.join(home, ".kiro", "settings", "mcp.json"))
+    return paths
+
+
 def auto_install():
     """
     Automatically detect Claude Desktop and Cursor, then inject the MCP
@@ -124,6 +133,8 @@ def auto_install():
         targets.append(("Claude Desktop", path))
     for path in _find_cursor_config_paths():
         targets.append(("Cursor", path))
+    for path in _find_kiro_config_paths():
+        targets.append(("Kiro IDE", path))
 
     if not targets:
         print("[!] Could not find any known MCP client config directories on this system.")
@@ -399,6 +410,8 @@ def auto_install_silent():
         targets.append(("Claude Desktop", path))
     for path in _find_cursor_config_paths():
         targets.append(("Cursor", path))
+    for path in _find_kiro_config_paths():
+        targets.append(("Kiro IDE", path))
 
     for client_name, config_path in targets:
         existing = {}
