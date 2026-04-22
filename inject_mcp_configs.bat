@@ -47,5 +47,28 @@ echo.
 echo [*] Launching the auto-installer engine...
 uv run main.py setup
 
+:: 6. Troubleshooting & Auto-Fixes
 echo.
+echo =======================================================
+echo     TROUBLESHOOTING ^& AUTO-FIXES
+echo =======================================================
+echo.
+echo [*] Checking for IDA Pro to auto-fix Python bindings...
+for /d %%d in ("%PROGRAMFILES%\IDA Pro *", "C:\IDA Pro *") do (
+    if exist "%%~d\idapyswitch.exe" (
+        echo   [+] Found IDA at %%~d. Running idapyswitch to bind Python...
+        "%%~d\idapyswitch.exe" --force-path >nul 2>&1
+    )
+)
+
+echo.
+echo [!] NOTE FOR GHIDRA USERS:
+echo     If Ghidra fails to start or the plugin doesn't load, you MUST
+echo     install Java Development Kit (JDK) 17 or 21 and add it to your PATH.
+echo.
+echo [!] NOTE FOR CHEAT ENGINE USERS:
+echo     We also installed a Lua plugin for Cheat Engine! If you can't get
+echo     IDA or Ghidra working, Cheat Engine works perfectly out of the box.
+echo.
+
 pause
