@@ -257,7 +257,7 @@ if exist "!SOCKET_DLL!" (
     if exist "!CE_ROOT!\socket\core.dll" (
         echo     [OK] luasocket found at !CE_ROOT!\socket\
     ) else (
-        echo     [!] luasocket NOT found. The plugin will use file-based IPC instead.
+        echo     [^!] luasocket NOT found. The plugin will use file-based IPC instead.
         echo     [i] For best performance, install luasocket manually:
         echo         1. Download socket/core.dll for Lua 5.3 ^(64-bit^)
         echo         2. Place it in: !CLIBS_DIR!\socket\core.dll
@@ -273,7 +273,7 @@ REM ── Summary ────────────────────�
 echo.
 echo  ========================================
 if !INSTALLED! GTR 0 (
-    echo   Successfully installed !INSTALLED! plugin(s)!
+    echo   Successfully installed !INSTALLED! plugin^(s^)^!
     echo   Restart your RE tools for changes to take effect.
 ) else (
     echo   No plugins were installed.
