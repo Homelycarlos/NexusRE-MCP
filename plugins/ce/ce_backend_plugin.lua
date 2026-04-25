@@ -69,12 +69,15 @@ local function dispatch_command(req)
         if not address or not hex_string then return "ERROR|Missing args" end
         local bytes = {}
         for byte_match in string.gmatch(hex_string, "%S+") do
-            table.insert(bytes, tonumber(byte_match, 16))
+            local b = tonumber(byte_match, 16)
+            if b == nil then return "ERROR|Invalid hex byte: " .. byte_match end
+            table.insert(bytes, b)
         end
-        if writeBytes(address, bytes) then
+        local ok, err = pcall(writeBytes, address, bytes)
+        if ok then
             return "SUCCESS"
         else
-            return "FAILED"
+            return "ERROR|" .. tostring(err)
         end
 
     elseif action == "READ_BYTES" then

@@ -243,8 +243,11 @@ class IDAAdapter(BaseAdapter):
             return {"error": res["error"]}
         return {"context": res.get("context", {})}
 
-    async def read_memory(self, address: int, size: int, as_bytes: bool = False) -> Any:
+    async def read_memory(self, address, size: int, as_bytes: bool = False) -> Any:
         """Read live debugged memory or statically mapped segments in IDA."""
+        # Ensure address is a hex string for the JSON payload
+        if isinstance(address, int):
+            address = hex(address)
         res = await self._call("read_memory", {"address": address, "size": size})
         hex_data = res.get("data", "")
         if as_bytes:

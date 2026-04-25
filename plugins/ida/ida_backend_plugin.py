@@ -299,6 +299,8 @@ class IdaOperations:
         # Native read_dbg_memory
         import ida_dbg
 
+        if isinstance(address, str):
+            address = int(address, 16)
         data = ida_dbg.read_dbg_memory(address, size)
         if data:
             return {"data": data.hex()}
@@ -407,10 +409,10 @@ class IdaOperations:
         for i in range(nimps):
             module_name = ida_nalt.get_import_module_name(i)
 
-            def imp_cb(ea, name, ordinal):
+            def imp_cb(ea, name, ordinal, _mod=module_name):
                 if name:
                     imports.append(
-                        {"address": hex(ea), "name": name, "module": module_name or ""}
+                        {"address": hex(ea), "name": name, "module": _mod or ""}
                     )
                 return True
 
@@ -458,7 +460,10 @@ class IdaOperations:
                                 "type": func_type,
                             }
                         )
-            current_ea = idc.next_head(current_ea, func_end)
+            next_ea = idc.next_head(current_ea, func_end)
+            if next_ea == idaapi.BADADDR:
+                break
+            current_ea = next_ea
         unique = {tuple(c.items()) for c in callees}
         return [dict(c) for c in unique]
 
@@ -1008,7 +1013,6 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             # Log the request
-            import time as _time
 
             print(
                 "[IDA-MCP] %s -> %s"

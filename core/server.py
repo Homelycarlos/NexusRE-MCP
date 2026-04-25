@@ -363,7 +363,7 @@ async def rename_symbol(session_id: str, address: str, name: str) -> Any:
         try:
             func = await adapter.get_function(address)
             if func:
-                old_name = func.get("name", "unknown")
+                old_name = getattr(func, 'name', None) or (func.get('name') if isinstance(func, dict) else 'unknown')
         except Exception:
             pass
         success = await adapter.rename_symbol(address, name)
