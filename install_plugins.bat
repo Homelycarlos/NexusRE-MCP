@@ -106,13 +106,22 @@ set "GHIDRA_FOUND=%USERPROFILE%\ghidra_scripts"
 
 :ghidra_found
 echo     [+] Ghidra scripts at: !GHIDRA_FOUND!
+REM Deploy Java version (works on ALL Ghidra installs - no PyGhidra needed)
+set "GHIDRA_JAVA_PLUGIN=%SCRIPT_DIR%plugins\ghidra\ghidra_backend_plugin.java"
+if exist "!GHIDRA_JAVA_PLUGIN!" (
+    copy /Y "!GHIDRA_JAVA_PLUGIN!" "!GHIDRA_FOUND!\ghidra_backend_plugin.java" >nul 2>&1
+    if !errorlevel! EQU 0 (
+        echo     [OK] Copied ghidra_backend_plugin.java ^(universal - works without PyGhidra^)
+    )
+)
+REM Also deploy Python version as fallback for PyGhidra users
 copy /Y "%GHIDRA_PLUGIN%" "!GHIDRA_FOUND!\ghidra_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied ghidra_backend_plugin.py
-    echo     [i] Open Ghidra Script Manager and add this directory to your script paths.
+    echo     [OK] Copied ghidra_backend_plugin.py ^(requires PyGhidra^)
+    echo     [i] Use the .java version if Python is not available in Ghidra.
     set /a INSTALLED+=1
 ) else (
-    echo     [!] Failed to copy.
+    echo     [^!] Failed to copy.
 )
 
 REM ── x64dbg ──────────────────────────────────────────────────────────────
