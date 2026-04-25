@@ -123,8 +123,11 @@ If you need to install them manually, here is how to set up each one from the `p
 ### 🐉 Ghidra
 1. Open Ghidra and navigate to your project.
 2. Open the **Script Manager** (`Window -> Script Manager`).
-3. Click the "Manage Script Directories" icon and add the `plugins/ghidra/` path, or copy `ghidra_backend_plugin.py` to your `~/ghidra_scripts/` folder.
-4. Run the script. Watch the console for *"Starting background HTTP server"*.
+3. Click the "Manage Script Directories" icon and add the `plugins/ghidra/` path, or copy the plugins to your `~/ghidra_scripts/` folder.
+4. Filter for `ghidra_backend_plugin`. You will see two versions:
+   - **`ghidra_backend_plugin.java`**: The **Universal Edition**. Use this one! It works on every single Ghidra installation out of the box with zero dependencies.
+   - `ghidra_backend_plugin.py`: The PyGhidra edition. Only use this if you have PyGhidra properly configured.
+5. Double-click the `.java` script to run it. Watch the console for *"Ghidra Java Backend LIVE"*.
 
 > **⚠️ Ghidra Requires Java:** You **must** have **JDK 17 or JDK 21** installed and in your system PATH. Ghidra will not start without it. Download from [Adoptium](https://adoptium.net/).
 

@@ -206,19 +206,30 @@ def install_plugins():
 
     for target in ghidra_targets:
         if os.path.isdir(target):
-            src = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-            dst = os.path.join(target, "ghidra_backend_plugin.py")
-            shutil.copy2(src, dst)
-            print(f"[+] Ghidra: Copied plugin to {target}")
+            # Java plugin
+            src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
+            if os.path.exists(src_java):
+                shutil.copy2(src_java, os.path.join(target, "ghidra_backend_plugin.java"))
+            # Python plugin
+            src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
+            if os.path.exists(src_py):
+                shutil.copy2(src_py, os.path.join(target, "ghidra_backend_plugin.py"))
+            print(f"[+] Ghidra: Copied plugins to {target}")
             installed += 1
             break
     else:
         # Create user scripts dir as fallback
         fallback = os.path.join(home, "ghidra_scripts")
         os.makedirs(fallback, exist_ok=True)
-        src = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-        shutil.copy2(src, os.path.join(fallback, "ghidra_backend_plugin.py"))
-        print(f"[+] Ghidra: Created {fallback} and copied plugin. Add this to Script Manager.")
+        # Java plugin
+        src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
+        if os.path.exists(src_java):
+            shutil.copy2(src_java, os.path.join(fallback, "ghidra_backend_plugin.java"))
+        # Python plugin
+        src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
+        if os.path.exists(src_py):
+            shutil.copy2(src_py, os.path.join(fallback, "ghidra_backend_plugin.py"))
+        print(f"[+] Ghidra: Created {fallback} and copied plugins. Add this to Script Manager.")
         installed += 1
 
     # ── Binary Ninja ──
@@ -372,11 +383,19 @@ def install_plugins_silent():
     home = os.path.expanduser("~")
     ghidra_target = os.path.join(home, "ghidra_scripts")
     os.makedirs(ghidra_target, exist_ok=True)
-    src = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-    if os.path.exists(src):
-        shutil.copy2(src, os.path.join(ghidra_target, "ghidra_backend_plugin.py"))
-        print(f"  [+] Ghidra plugin -> {ghidra_target}")
-        installed += 1
+    
+    # Java plugin
+    src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
+    if os.path.exists(src_java):
+        shutil.copy2(src_java, os.path.join(ghidra_target, "ghidra_backend_plugin.java"))
+    
+    # Python plugin
+    src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
+    if os.path.exists(src_py):
+        shutil.copy2(src_py, os.path.join(ghidra_target, "ghidra_backend_plugin.py"))
+        
+    print(f"  [+] Ghidra plugin(s) -> {ghidra_target}")
+    installed += 1
 
     print(f"  Installed {installed} plugin(s).")
 
