@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NexusRE.Exdnspy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4edc626fc6d949d989f8e35350a95c45f4aed386")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4deca12d64438e7fffb06d012b9ebdef07055c36")]
 [assembly: System.Reflection.AssemblyProductAttribute("NexusRE.Exdnspy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NexusRE.Exdnspy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
