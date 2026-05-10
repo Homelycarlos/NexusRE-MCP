@@ -524,7 +524,76 @@ Supported Backends:
     sys.exit(0)
 
 
+def auto_update_silent():
+    """Silently check for and apply updates once every 24 hours."""
+    try:
+        import subprocess, time, shutil, tempfile, urllib.request, zipfile
+        root_dir = os.path.dirname(os.path.abspath(__file__))
+        last_update_file = os.path.join(root_dir, ".last_update")
+        
+        now = time.time()
+        if os.path.exists(last_update_file):
+            with open(last_update_file, "r") as f:
+                try:
+                    if now - float(f.read().strip()) < 86400: return
+                except ValueError: pass
+                    
+        git_dir = os.path.join(root_dir, ".git")
+        did_update = False
+
+        if os.path.exists(git_dir):
+            subprocess.run(["git", "fetch"], capture_output=True, check=False, cwd=root_dir)
+            status = subprocess.run(["git", "status", "-uno"], capture_output=True, text=True, check=False, cwd=root_dir)
+            if "Your branch is behind" in status.stdout:
+                subprocess.run(["git", "pull"], capture_output=True, check=False, cwd=root_dir)
+                did_update = True
+        else:
+            import json
+            req = urllib.request.Request("https://api.github.com/repos/Homelycarlos/NexusRE-MCP/commits/master")
+            req.add_header("User-Agent", "NexusRE-MCP-AutoUpdater")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                latest_sha = json.loads(response.read().decode())["sha"]
+            
+            version_file = os.path.join(root_dir, ".version")
+            current_sha = ""
+            if os.path.exists(version_file):
+                with open(version_file, "r") as f:
+                    current_sha = f.read().strip()
+            
+            if current_sha != latest_sha:
+                zip_url = "https://github.com/Homelycarlos/NexusRE-MCP/archive/refs/heads/master.zip"
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    zip_path = os.path.join(tmpdir, "update.zip")
+                    urllib.request.urlretrieve(zip_url, zip_path)
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(tmpdir)
+                        
+                    extracted_folder = os.path.join(tmpdir, "NexusRE-MCP-master")
+                    for src_dir, dirs, files in os.walk(extracted_folder):
+                        dst_dir = src_dir.replace(extracted_folder, root_dir, 1)
+                        if not os.path.exists(dst_dir): os.makedirs(dst_dir)
+                        for file_ in files:
+                            shutil.copy2(os.path.join(src_dir, file_), os.path.join(dst_dir, file_))
+                            
+                with open(version_file, "w") as f: f.write(latest_sha)
+                did_update = True
+
+        with open(last_update_file, "w") as f: f.write(str(now))
+
+        if did_update:
+            uv_exe = os.path.join(root_dir, ".venv", "Scripts", "uv.exe") if platform.system() == "Windows" else os.path.join(root_dir, ".venv", "bin", "uv")
+            if os.path.exists(uv_exe): subprocess.run([uv_exe, "sync"], capture_output=True, cwd=root_dir)
+            else: subprocess.run(["uv", "sync"], capture_output=True, cwd=root_dir)
+            os.execl(sys.executable, sys.executable, *sys.argv)
+            
+    except Exception:
+        pass
+
+
 def main_cli():
+    # Attempt silent auto-update before starting the server
+    auto_update_silent()
+
     if "--help" in sys.argv or "-h" in sys.argv:
         print_help()
 
