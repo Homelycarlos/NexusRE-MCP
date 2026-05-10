@@ -16,7 +16,7 @@ logger = logging.getLogger("NexusRE")
 
 
 def _tokenize(code: str) -> list:
-    """Tokenize decompiled C code into meaningful tokens, stripping noise."""
+    """Tokenize decompiled C code into meaningful tokens and 2-grams, stripping noise."""
     # Remove addresses, hex literals that change between builds
     code = re.sub(r'0x[0-9a-fA-F]+', 'HEXVAL', code)
     # Remove variable names like local_XX, param_X, uVar1
@@ -25,8 +25,17 @@ def _tokenize(code: str) -> list:
     code = re.sub(r'FUN_[0-9a-fA-F]+', 'FUNC', code)
     # Remove DAT_ addresses
     code = re.sub(r'DAT_[0-9a-fA-F]+', 'DATA', code)
+    
     # Tokenize on non-alphanumeric
-    tokens = re.findall(r'[a-zA-Z_]\w*|[^\s\w]', code)
+    base_tokens = re.findall(r'[a-zA-Z_]\w*|[^\s\w]', code)
+    
+    # Generate 1-grams and 2-grams
+    tokens = []
+    for i in range(len(base_tokens)):
+        tokens.append(base_tokens[i])
+        if i < len(base_tokens) - 1:
+            tokens.append(f"{base_tokens[i]}_{base_tokens[i+1]}")
+            
     return tokens
 
 

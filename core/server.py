@@ -1786,15 +1786,26 @@ async def undo_last_change(session_id: str) -> Any:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # @mcp.tool() # Removed for Limit Bypass
-async def sync_symbols(source_session_id: str, target_session_id: str, limit: int = 500) -> Any:
+async def sync_symbols(source_session_id: str, target_session_id: str, limit: int = 500, source_base: str = None, target_base: str = None) -> Any:
     """
     Sync renamed symbols and comments from one session to another.
     Typically used to sync IDA ↔ Ghidra when the same binary is open in both.
     Reads all named functions from the source and applies renames in the target.
+    Can apply a base address offset if `source_base` and `target_base` are provided (e.g. '0x140000000').
     """
     try:
         source = get_adapter(source_session_id)
         target = get_adapter(target_session_id)
+
+        # Calculate base offset if provided
+        offset = 0
+        if source_base and target_base:
+            try:
+                s_base = int(source_base, 16) if source_base.startswith('0x') else int(source_base)
+                t_base = int(target_base, 16) if target_base.startswith('0x') else int(target_base)
+                offset = t_base - s_base
+            except ValueError:
+                return handle_error(Exception("Invalid base address format. Use hex (e.g., 0x140000000) or integer."))
 
         # Get all functions from source
         source_funcs = await source.list_functions(offset=0, limit=limit)
@@ -1812,12 +1823,19 @@ async def sync_symbols(source_session_id: str, target_session_id: str, limit: in
             if not name or name.startswith("FUN_") or name.startswith("sub_"):
                 skipped += 1
                 continue
+            
             try:
-                success = await target.rename_symbol(address, name)
+                target_address = address
+                if offset != 0 and address:
+                    addr_val = int(address, 16) if address.startswith('0x') else int(address)
+                    new_addr_val = addr_val + offset
+                    target_address = hex(new_addr_val)
+                    
+                success = await target.rename_symbol(target_address, name)
                 if success:
                     synced += 1
                     from .diff_engine import diff_engine
-                    diff_engine.record(target_session_id, "sync_rename", address,
+                    diff_engine.record(target_session_id, "sync_rename", target_address,
                                        f"from:{source_session_id}", name)
                 else:
                     skipped += 1
@@ -1828,7 +1846,7 @@ async def sync_symbols(source_session_id: str, target_session_id: str, limit: in
             "synced": synced,
             "skipped": skipped,
             "errors": errors,
-            "message": f"Synced {synced} symbols from {source_session_id} -> {target_session_id}"
+            "message": f"Synced {synced} symbols from {source_session_id} -> {target_session_id}" + (f" (offset: {hex(offset)})" if offset else "")
         }
     except Exception as e:
         return handle_error(e)
