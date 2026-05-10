@@ -136,7 +136,22 @@ if exist "!GHIDRA_JAVA_PLUGIN!" (
 copy /Y "!GHIDRA_JAVA_PLUGIN!" "!GHIDRA_FOUND!\ghidra_backend_plugin.java" >nul 2>&1
     if !errorlevel! EQU 0 (
         echo      [32m[OK] [0m Copied ghidra_backend_plugin.java ^(universal - works without PyGhidra^)
-        certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.java" SHA256 >> "!LOG!" 2>&1
+        
+        REM Integrity check
+        for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.java" SHA256') do (
+            if not defined DEST_HASH_JAVA set DEST_HASH_JAVA=%%H
+        )
+        for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!GHIDRA_JAVA_PLUGIN!" SHA256') do (
+            if not defined SRC_HASH_JAVA set SRC_HASH_JAVA=%%H
+        )
+        if "!SRC_HASH_JAVA!"=="!DEST_HASH_JAVA!" (
+            echo      [32m[OK] [0m Integrity check passed for .java plugin.
+        ) else (
+            echo      [31m[!] [0m Integrity check failed for .java plugin! Rolling back...
+            if exist "!GHIDRA_FOUND!\ghidra_backend_plugin.java.bak" (
+                copy /Y "!GHIDRA_FOUND!\ghidra_backend_plugin.java.bak" "!GHIDRA_FOUND!\ghidra_backend_plugin.java" >nul 2>&1
+            )
+        )
     )
 )
 REM Also deploy Python version as fallback for PyGhidra users
@@ -144,9 +159,24 @@ if exist "!GHIDRA_FOUND!\ghidra_backend_plugin.py" ( copy /Y "!GHIDRA_FOUND!\ghi
 copy /Y "%GHIDRA_PLUGIN%" "!GHIDRA_FOUND!\ghidra_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
     echo      [32m[OK] [0m Copied ghidra_backend_plugin.py ^(requires PyGhidra^)
-    certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
+    
+    REM Integrity check
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.py" SHA256') do (
+        if not defined DEST_HASH_PY set DEST_HASH_PY=%%H
+    )
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "%GHIDRA_PLUGIN%" SHA256') do (
+        if not defined SRC_HASH_PY set SRC_HASH_PY=%%H
+    )
+    if "!SRC_HASH_PY!"=="!DEST_HASH_PY!" (
+        echo      [32m[OK] [0m Integrity check passed for .py plugin.
+        set /a INSTALLED+=1
+    ) else (
+        echo      [31m[!] [0m Integrity check failed for .py plugin! Rolling back...
+        if exist "!GHIDRA_FOUND!\ghidra_backend_plugin.py.bak" (
+            copy /Y "!GHIDRA_FOUND!\ghidra_backend_plugin.py.bak" "!GHIDRA_FOUND!\ghidra_backend_plugin.py" >nul 2>&1
+        )
+    )
     echo      [33m[i] [0m Use the .java version if Python is not available in Ghidra.
-    set /a INSTALLED+=1
 ) else (
     echo     [^!] Failed to copy.
 )
@@ -193,9 +223,24 @@ if exist "!X64DBG_FOUND!\x64dbg_backend_plugin.py" ( copy /Y "!X64DBG_FOUND!\x64
 copy /Y "%X64DBG_PLUGIN%" "!X64DBG_FOUND!\x64dbg_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
     echo      [32m[OK] [0m Copied x64dbg_backend_plugin.py
-    certutil -hashfile "!X64DBG_FOUND!\x64dbg_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
+    
+    REM Integrity check
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!X64DBG_FOUND!\x64dbg_backend_plugin.py" SHA256') do (
+        if not defined DEST_HASH_X64 set DEST_HASH_X64=%%H
+    )
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "%X64DBG_PLUGIN%" SHA256') do (
+        if not defined SRC_HASH_X64 set SRC_HASH_X64=%%H
+    )
+    if "!SRC_HASH_X64!"=="!DEST_HASH_X64!" (
+        echo      [32m[OK] [0m Integrity check passed for x64dbg plugin.
+        set /a INSTALLED+=1
+    ) else (
+        echo      [31m[!] [0m Integrity check failed for x64dbg plugin! Rolling back...
+        if exist "!X64DBG_FOUND!\x64dbg_backend_plugin.py.bak" (
+            copy /Y "!X64DBG_FOUND!\x64dbg_backend_plugin.py.bak" "!X64DBG_FOUND!\x64dbg_backend_plugin.py" >nul 2>&1
+        )
+    )
     echo      [33m[i] [0m Make sure x64dbgpy is installed for Python support.
-    set /a INSTALLED+=1
 ) else (
     echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )
@@ -235,8 +280,23 @@ if exist "!BINJA_FOUND!\binja_backend_plugin.py" ( copy /Y "!BINJA_FOUND!\binja_
 copy /Y "%BINJA_PLUGIN%" "!BINJA_FOUND!\binja_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
     echo      [32m[OK] [0m Copied binja_backend_plugin.py
-    certutil -hashfile "!BINJA_FOUND!\binja_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
-    set /a INSTALLED+=1
+    
+    REM Integrity check
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!BINJA_FOUND!\binja_backend_plugin.py" SHA256') do (
+        if not defined DEST_HASH_BINJA set DEST_HASH_BINJA=%%H
+    )
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "%BINJA_PLUGIN%" SHA256') do (
+        if not defined SRC_HASH_BINJA set SRC_HASH_BINJA=%%H
+    )
+    if "!SRC_HASH_BINJA!"=="!DEST_HASH_BINJA!" (
+        echo      [32m[OK] [0m Integrity check passed for binja plugin.
+        set /a INSTALLED+=1
+    ) else (
+        echo      [31m[!] [0m Integrity check failed for binja plugin! Rolling back...
+        if exist "!BINJA_FOUND!\binja_backend_plugin.py.bak" (
+            copy /Y "!BINJA_FOUND!\binja_backend_plugin.py.bak" "!BINJA_FOUND!\binja_backend_plugin.py" >nul 2>&1
+        )
+    )
 ) else (
     echo      [31m[!] [0m Failed to copy.
 )
@@ -273,8 +333,23 @@ if exist "!CE_FOUND!\ce_backend_plugin.lua" ( copy /Y "!CE_FOUND!\ce_backend_plu
 copy /Y "%CE_PLUGIN%" "!CE_FOUND!\ce_backend_plugin.lua" >nul 2>&1
 if !errorlevel! EQU 0 (
     echo      [32m[OK] [0m Copied ce_backend_plugin.lua to autorun
-    certutil -hashfile "!CE_FOUND!\ce_backend_plugin.lua" SHA256 >> "!LOG!" 2>&1
-    set /a INSTALLED+=1
+    
+    REM Integrity check
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!CE_FOUND!\ce_backend_plugin.lua" SHA256') do (
+        if not defined DEST_HASH_CE set DEST_HASH_CE=%%H
+    )
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "%CE_PLUGIN%" SHA256') do (
+        if not defined SRC_HASH_CE set SRC_HASH_CE=%%H
+    )
+    if "!SRC_HASH_CE!"=="!DEST_HASH_CE!" (
+        echo      [32m[OK] [0m Integrity check passed for Cheat Engine plugin.
+        set /a INSTALLED+=1
+    ) else (
+        echo      [31m[!] [0m Integrity check failed for Cheat Engine plugin! Rolling back...
+        if exist "!CE_FOUND!\ce_backend_plugin.lua.bak" (
+            copy /Y "!CE_FOUND!\ce_backend_plugin.lua.bak" "!CE_FOUND!\ce_backend_plugin.lua" >nul 2>&1
+        )
+    )
 ) else (
     echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )

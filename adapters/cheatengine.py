@@ -122,10 +122,10 @@ class CheatEngineAdapter(BaseAdapter):
         """Execute a raw Lua script inside the Cheat Engine environment via HTTP RPC."""
         payload = {"action": "execute_lua", "script": script}
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post(f"{self.base_url}/", json=payload) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
+            session = await self._get_session()
+            async with session.post(f"{self.base_url}/", json=payload) as resp:
+                resp.raise_for_status()
+                return await resp.json()
         except Exception as e:
             return {"error": f"Failed connecting to Cheat Engine RPC: {e}"}
 

@@ -11,23 +11,46 @@ import hashlib
 import re
 import logging
 from collections import Counter
+from functools import lru_cache
 
 logger = logging.getLogger("NexusRE")
 
+# Pre-compile Regex patterns for extreme performance during large code scans
+PATTERN_HEX = re.compile(r'0x[0-9a-fA-F]+')
+PATTERN_VAR = re.compile(r'\b(local|param|uVar|iVar|lVar|bVar|cVar|sVar|pVar|ppVar|auVar)\w+')
+PATTERN_FUNC = re.compile(r'FUN_[0-9a-fA-F]+')
+PATTERN_DATA = re.compile(r'DAT_[0-9a-fA-F]+')
+PATTERN_IL = re.compile(r'IL_[0-9a-fA-F]+:')
+PATTERN_TOKEN = re.compile(r'0x[0-9a-fA-F]{8}')
+PATTERN_PCODE_REG = re.compile(r'\(register, 0x[0-9a-fA-F]+, \d+\)')
+PATTERN_PCODE_RAM = re.compile(r'\(ram, 0x[0-9a-fA-F]+, \d+\)')
+PATTERN_PCODE_CONST = re.compile(r'\(const, 0x[0-9a-fA-F]+, \d+\)')
+PATTERN_PCODE_UNIQUE = re.compile(r'\(unique, 0x[0-9a-fA-F]+, \d+\)')
+PATTERN_WORDS = re.compile(r'[a-zA-Z_]\w*|[^\s\w]')
 
-def _tokenize(code: str) -> list:
+
+@lru_cache(maxsize=4096)
+def _tokenize(code: str) -> tuple:
     """Tokenize decompiled C code into meaningful tokens and 2-grams, stripping noise."""
     # Remove addresses, hex literals that change between builds
-    code = re.sub(r'0x[0-9a-fA-F]+', 'HEXVAL', code)
+    code = PATTERN_HEX.sub('HEXVAL', code)
     # Remove variable names like local_XX, param_X, uVar1
-    code = re.sub(r'\b(local|param|uVar|iVar|lVar|bVar|cVar|sVar|pVar|ppVar|auVar)\w+', 'VAR', code)
+    code = PATTERN_VAR.sub('VAR', code)
     # Remove FUN_ addresses
-    code = re.sub(r'FUN_[0-9a-fA-F]+', 'FUNC', code)
+    code = PATTERN_FUNC.sub('FUNC', code)
     # Remove DAT_ addresses
-    code = re.sub(r'DAT_[0-9a-fA-F]+', 'DATA', code)
+    code = PATTERN_DATA.sub('DATA', code)
+    # Remove MSIL specific offsets and tokens
+    code = PATTERN_IL.sub('IL_OFFSET:', code)
+    code = PATTERN_TOKEN.sub('TOKENVAL', code)
+    # Remove PCode specific register/ram references
+    code = PATTERN_PCODE_REG.sub('PCODE_REG', code)
+    code = PATTERN_PCODE_RAM.sub('PCODE_RAM', code)
+    code = PATTERN_PCODE_CONST.sub('PCODE_CONST', code)
+    code = PATTERN_PCODE_UNIQUE.sub('PCODE_UNIQUE', code)
     
     # Tokenize on non-alphanumeric
-    base_tokens = re.findall(r'[a-zA-Z_]\w*|[^\s\w]', code)
+    base_tokens = PATTERN_WORDS.findall(code)
     
     # Generate 1-grams and 2-grams
     tokens = []
@@ -36,11 +59,13 @@ def _tokenize(code: str) -> list:
         if i < len(base_tokens) - 1:
             tokens.append(f"{base_tokens[i]}_{base_tokens[i+1]}")
             
-    return tokens
+    return tuple(tokens)
 
 
-def _cosine_similarity(tokens_a: list, tokens_b: list) -> float:
+def _cosine_similarity(tokens_a: tuple, tokens_b: tuple) -> float:
     """Compute cosine similarity between two token lists."""
+    if tokens_a == tokens_b:
+        return 1.0  # Fast path for identical code
     counter_a = Counter(tokens_a)
     counter_b = Counter(tokens_b)
     all_tokens = set(counter_a.keys()) | set(counter_b.keys())

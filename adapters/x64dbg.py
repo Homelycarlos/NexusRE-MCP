@@ -29,17 +29,16 @@ class X64DbgAdapter(BaseAdapter):
                 return self._cache[cache_key]
 
         payload = {"action": action, "args": args}
-        timeout = aiohttp.ClientTimeout(total=30)
         
         for attempt in range(3):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{self.base_url}/", json=payload) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                        if cache_key:
-                            self._cache[cache_key] = data
-                        return data
+                session = await self._get_session()
+                async with session.post(f"{self.base_url}/", json=payload) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    if cache_key:
+                        self._cache[cache_key] = data
+                    return data
             except Exception as e:
                 if attempt == 2:
                     raise Exception(f"Fatal x64dbg connection error after 3 retries: {e}")

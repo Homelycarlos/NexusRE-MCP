@@ -12,6 +12,14 @@ class BaseAdapter(abc.ABC):
     that return normalized deterministic schemas.
     """
 
+    async def _get_session(self):
+        """Lazy load a persistent aiohttp.ClientSession to eliminate TCP handshakes."""
+        import aiohttp
+        if not hasattr(self, '_session') or self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
     # ── Decompilation & Function Listing ──────────────────────────────────
 
     @abc.abstractmethod

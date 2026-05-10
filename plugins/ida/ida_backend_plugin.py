@@ -12,43 +12,35 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 class IdaOperations:
     @staticmethod
     def _execute_sync(func, *args, **kwargs):
-        class SyncReq:
-            def __init__(self):
-                self.result = None
-                self.error = None
-
-            def run(self):
-                try:
-                    self.result = func(*args, **kwargs)
-                except Exception as e:
-                    self.error = str(e)
-                return 1
-
-        req = SyncReq()
-        idaapi.execute_sync(req.run, idaapi.MFF_READ)
-        if req.error:
-            raise Exception(req.error)
-        return req.result
+        result = [None, None]  # [res, err]
+        
+        def run():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                result[1] = str(e)
+            return 1
+            
+        idaapi.execute_sync(run, idaapi.MFF_READ)
+        if result[1]:
+            raise Exception(result[1])
+        return result[0]
 
     @staticmethod
     def _execute_sync_write(func, *args, **kwargs):
-        class SyncReq:
-            def __init__(self):
-                self.result = None
-                self.error = None
-
-            def run(self):
-                try:
-                    self.result = func(*args, **kwargs)
-                except Exception as e:
-                    self.error = str(e)
-                return 1
-
-        req = SyncReq()
-        idaapi.execute_sync(req.run, idaapi.MFF_WRITE)
-        if req.error:
-            raise Exception(req.error)
-        return req.result
+        result = [None, None]  # [res, err]
+        
+        def run():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                result[1] = str(e)
+            return 1
+            
+        idaapi.execute_sync(run, idaapi.MFF_WRITE)
+        if result[1]:
+            raise Exception(result[1])
+        return result[0]
 
     # ── Core Navigation ───────────────────────────────────────────────────
 

@@ -255,6 +255,59 @@ class GhidraRequestHandler(BaseHTTPRequestHandler):
                 })
             return {"xrefs": refs}
 
+        # ── Advanced Analysis ──────────────────────────────────────────
+        elif action == "ghidra_get_complexity":
+            addr_str = args.get("address", "")
+            addr = prog.getAddressFactory().getAddress(addr_str)
+            if not addr:
+                return {"success": False, "error_message": "Invalid address"}
+            func = prog.getFunctionManager().getFunctionAt(addr)
+            if not func:
+                return {"success": False, "error_message": "No function at address"}
+            
+            # Cyclomatic Complexity = Edges - Nodes + 2
+            from ghidra.program.model.block import BasicBlockModel
+            from ghidra.util.task import TaskMonitor
+            model = BasicBlockModel(prog)
+            blocks = model.getCodeBlocksContaining(func.getBody(), TaskMonitor.DUMMY)
+            nodes = 0
+            edges = 0
+            while blocks.hasNext():
+                block = blocks.next()
+                nodes += 1
+                dest_iter = block.getDestinations(TaskMonitor.DUMMY)
+                while dest_iter.hasNext():
+                    dest_iter.next()
+                    edges += 1
+            
+            complexity = (edges - nodes + 2) if nodes > 0 else 0
+            return {"success": True, "complexity": complexity, "edges": edges, "nodes": nodes}
+
+        elif action == "ghidra_extract_pcode":
+            addr_str = args.get("address", "")
+            addr = prog.getAddressFactory().getAddress(addr_str)
+            if not addr:
+                return {"success": False, "error_message": "Invalid address"}
+            func = prog.getFunctionManager().getFunctionAt(addr)
+            if not func:
+                return {"success": False, "error_message": "No function at address"}
+            
+            from ghidra.app.decompiler import DecompInterface
+            decomp = DecompInterface()
+            decomp.openProgram(prog)
+            res = decomp.decompileFunction(func, 30, ConsoleTaskMonitor())
+            
+            pcode_lines = []
+            if res and res.decompileCompleted():
+                high_func = res.getHighFunction()
+                if high_func:
+                    for pcode_op in high_func.getPcodeOps():
+                        pcode_lines.append(pcode_op.toString())
+            decomp.dispose()
+            
+            return {"success": True, "pcode": pcode_lines}
+
+
         # ── Strings ────────────────────────────────────────────────────
         elif action == "ghidra_get_strings":
             from ghidra.program.util import DefinedDataIterator

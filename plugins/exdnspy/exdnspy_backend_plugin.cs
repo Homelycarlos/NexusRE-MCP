@@ -163,6 +163,10 @@ namespace NexusRE.Exdnspy
                 case "get_callers":
                     return GetCallers(GetArg(args, "address"));
 
+                // ── Advanced Analysis ────────────────────────────────────
+                case "get_complexity":
+                    return GetComplexity(GetArg(args, "address"));
+
                 // ── Data extraction ──────────────────────────────────────
                 case "get_strings":
                     return GetStrings(args);
@@ -299,6 +303,28 @@ namespace NexusRE.Exdnspy
                                         var sb = new StringBuilder();
                                         sb.AppendLine($"// IL Disassembly for {methodBase.Name}");
                                         
+                                        // Emit Local Variables
+                                        if (body.LocalVariables != null && body.LocalVariables.Count > 0)
+                                        {
+                                            sb.AppendLine("// Locals:");
+                                            foreach (var local in body.LocalVariables)
+                                            {
+                                                sb.AppendLine($"//   [{local.LocalIndex}] {local.LocalType.FullName}");
+                                            }
+                                            sb.AppendLine();
+                                        }
+
+                                        // Emit Exception Handling Clauses
+                                        if (body.ExceptionHandlingClauses != null && body.ExceptionHandlingClauses.Count > 0)
+                                        {
+                                            sb.AppendLine("// Exception Handlers:");
+                                            foreach (var clause in body.ExceptionHandlingClauses)
+                                            {
+                                                sb.AppendLine($"//   {clause.Flags} - Try: IL_{clause.TryOffset:X4}..IL_{clause.TryOffset + clause.TryLength:X4} | Handler: IL_{clause.HandlerOffset:X4}..IL_{clause.HandlerOffset + clause.HandlerLength:X4}");
+                                            }
+                                            sb.AppendLine();
+                                        }
+
                                         int i = 0;
                                         while (i < il.Length)
                                         {
@@ -498,6 +524,103 @@ namespace NexusRE.Exdnspy
             }
 
             return new { xrefs = new { to = xrefs_to, from_ = xrefs_from } };
+        }
+
+        private static object GetComplexity(string address)
+        {
+            if (!string.IsNullOrEmpty(_loadedBinary) && File.Exists(_loadedBinary))
+            {
+                try
+                {
+                    var asm = Assembly.LoadFrom(_loadedBinary);
+                    int token = Convert.ToInt32(address, 16);
+                    
+                    var opcodes = new Dictionary<short, System.Reflection.Emit.OpCode>();
+                    foreach (var field in typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+                    {
+                        var opcode = (System.Reflection.Emit.OpCode)field.GetValue(null);
+                        opcodes[opcode.Value] = opcode;
+                    }
+
+                    foreach (var module in asm.GetModules())
+                    {
+                        try
+                        {
+                            var methodBase = module.ResolveMethod(token);
+                            if (methodBase != null)
+                            {
+                                var body = methodBase.GetMethodBody();
+                                if (body != null)
+                                {
+                                    var il = body.GetILAsByteArray();
+                                    if (il != null)
+                                    {
+                                        int complexity = 1; // Base path
+                                        int i = 0;
+                                        while (i < il.Length)
+                                        {
+                                            short opValue = il[i++];
+                                            if (opValue == 0xFE && i < il.Length)
+                                            {
+                                                opValue = (short)((opValue << 8) | il[i++]);
+                                            }
+
+                                            if (opcodes.TryGetValue(opValue, out var opcode))
+                                            {
+                                                switch (opcode.FlowControl)
+                                                {
+                                                    case System.Reflection.Emit.FlowControl.Cond_Branch:
+                                                        complexity++;
+                                                        break;
+                                                }
+
+                                                switch (opcode.OperandType)
+                                                {
+                                                    case System.Reflection.Emit.OperandType.InlineMethod:
+                                                    case System.Reflection.Emit.OperandType.InlineField:
+                                                    case System.Reflection.Emit.OperandType.InlineType:
+                                                    case System.Reflection.Emit.OperandType.InlineTok:
+                                                    case System.Reflection.Emit.OperandType.InlineString:
+                                                    case System.Reflection.Emit.OperandType.InlineSig:
+                                                    case System.Reflection.Emit.OperandType.InlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.InlineI:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineR:
+                                                        i += 4;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineSwitch:
+                                                        if (i + 4 <= il.Length)
+                                                        {
+                                                            int count = BitConverter.ToInt32(il, i);
+                                                            complexity += count; // Add switch cases
+                                                            i += 4 + (count * 4);
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineI8:
+                                                    case System.Reflection.Emit.OperandType.InlineR:
+                                                        i += 8;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.ShortInlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineI:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineVar:
+                                                        i += 1;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineVar:
+                                                        i += 2;
+                                                        break;
+                                                }
+                                            }
+                                        }
+                                        return new { success = true, complexity = complexity };
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            return new { success = false, error = "Failed to calculate complexity" };
         }
 
         private static object GetCallees(string address)

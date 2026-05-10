@@ -16,6 +16,13 @@ class GhidraAdapter(BaseAdapter):
     def __init__(self, backend_url: str):
         self.base_url = backend_url
         self._cache = {}
+        self._session = None
+
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
 
     async def _call(self, action: str, args: dict = None) -> dict:
         import asyncio
@@ -28,17 +35,16 @@ class GhidraAdapter(BaseAdapter):
                 return self._cache[cache_key]
 
         payload = {"action": action, "args": args}
-        timeout = aiohttp.ClientTimeout(total=30)
         
         for attempt in range(3):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{self.base_url}/", json=payload) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                        if cache_key:
-                            self._cache[cache_key] = data
-                        return data
+                session = await self._get_session()
+                async with session.post(f"{self.base_url}/", json=payload) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    if cache_key:
+                        self._cache[cache_key] = data
+                    return data
             except Exception as e:
                 if attempt == 2:
                     raise Exception(f"Fatal Ghidra connection error after 3 retries: {e}")
@@ -110,6 +116,18 @@ class GhidraAdapter(BaseAdapter):
     async def analyze_functions(self, addresses: List[str]) -> bool:
         res = await self._call("ghidra_analyze_functions", {"addresses": addresses})
         return res.get("success", False)
+
+    async def analyze_functions(self, addresses: List[str]) -> bool:
+        res = await self._call("ghidra_analyze_functions", {"addresses": addresses})
+        return res.get("success", False)
+
+    async def get_complexity(self, address: str) -> Optional[int]:
+        res = await self._call("ghidra_get_complexity", {"address": address})
+        return res.get("complexity") if res and res.get("success") else None
+
+    async def extract_pcode(self, address: str) -> List[str]:
+        res = await self._call("ghidra_extract_pcode", {"address": address})
+        return res.get("pcode", []) if res and res.get("success") else []
 
     # ── Cross-References ──────────────────────────────────────────────────
 

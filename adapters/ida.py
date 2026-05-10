@@ -16,6 +16,13 @@ class IDAAdapter(BaseAdapter):
     def __init__(self, backend_url: str):
         self.base_url = backend_url
         self._cache = {}
+        self._session = None
+
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
 
     async def _call(self, action: str, args: dict = None) -> dict:
         """Issue a JSON POST to the background HTTP server with Retry + Caching."""
@@ -35,17 +42,16 @@ class IDAAdapter(BaseAdapter):
         payload = {"action": action, "args": args}
         
         # 2. 3x Retry Loop for Stability & Timeout protection
-        timeout = aiohttp.ClientTimeout(total=30)
         for attempt in range(3):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{self.base_url}/", json=payload) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                        # Save to cache if it's a read op
-                        if cache_key:
-                            self._cache[cache_key] = data
-                        return data
+                session = await self._get_session()
+                async with session.post(f"{self.base_url}/", json=payload) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    # Save to cache if it's a read op
+                    if cache_key:
+                        self._cache[cache_key] = data
+                    return data
             except Exception as e:
                 if attempt == 2:
                     raise Exception(f"Fatal IDA connection error after 3 retries: {e}")
