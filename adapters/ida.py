@@ -123,6 +123,18 @@ class IDAAdapter(BaseAdapter):
         res = await self._call("analyze_functions", {"addresses": addresses})
         return res.get("success", False)
 
+    async def extract_microcode(self, address: str) -> Optional[str]:
+        res = await self._call("extract_microcode", {"address": address})
+        return res.get("microcode")
+
+    async def get_complexity(self, address: str) -> dict:
+        res = await self._call("get_complexity", {"address": address})
+        return res if isinstance(res, dict) else {"error": str(res)}
+
+    async def guess_struct(self, address: str) -> Optional[str]:
+        res = await self._call("guess_struct", {"address": address})
+        return res.get("struct")
+
     # ── Cross-References ──────────────────────────────────────────────────
 
     async def get_xrefs(self, address: str) -> List[XrefSchema]:

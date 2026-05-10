@@ -238,6 +238,20 @@ async def disassemble_at(session_id: str, address: str) -> Any:
         return handle_error(e)
 
 # @mcp.tool() # Removed for Limit Bypass
+async def extract_microcode(session_id: str, address: str) -> Any:
+    """Extract Hex-Rays raw microcode (m-code) at the given address."""
+    try:
+        adapter = get_adapter(session_id)
+        # Check if adapter supports it (IDA specific currently)
+        if hasattr(adapter, "extract_microcode"):
+            code = await adapter.extract_microcode(address)
+            return {"microcode": code}
+        return {"error": "extract_microcode not supported by this backend"}
+    except Exception as e:
+        return handle_error(e)
+
+# @mcp.tool() # Removed for Limit Bypass
+
 async def batch_decompile(session_id: str, addresses: list[str]) -> Any:
     """Batch decompile multiple functions at once."""
     try:
@@ -3169,6 +3183,58 @@ async def smart_search(session_id: str, query: str) -> Any:
         return handle_error(e)
 
 
+# @mcp.tool() # Removed for Limit Bypass
+async def get_complexity(session_id: str, address: str) -> Any:
+    """Get cyclomatic complexity and basic block graph data for a function."""
+    try:
+        adapter = get_adapter(session_id)
+        if hasattr(adapter, "get_complexity"):
+            return await adapter.get_complexity(address)
+        return {"error": "get_complexity not supported by this backend"}
+    except Exception as e:
+        return handle_error(e)
+
+# @mcp.tool() # Removed for Limit Bypass
+async def guess_struct(session_id: str, address: str) -> Any:
+    """Analyze pointer dereferences in a function to auto-recover a C-struct."""
+    try:
+        adapter = get_adapter(session_id)
+        if hasattr(adapter, "guess_struct"):
+            struct_data = await adapter.guess_struct(address)
+            return {"struct": struct_data}
+        return {"error": "guess_struct not supported by this backend"}
+    except Exception as e:
+        return handle_error(e)
+
+# @mcp.tool() # Removed for Limit Bypass
+async def auto_frida_hook_generator(session_id: str, address: str) -> Any:
+    """Automatically generate a Frida hook script based on the function's signature and calling convention."""
+    try:
+        adapter = get_adapter(session_id)
+        # Try to get function details
+        func_details = await adapter.get_function(address)
+        if not func_details:
+            return {"error": "Could not retrieve function details for Frida hook generation"}
+            
+        name = func_details.name if hasattr(func_details, 'name') else "unknown_func"
+        # Generate generic Frida hook based on what we know
+        script = f"""
+// Auto-generated Frida hook for {name} at {address}
+Interceptor.attach(ptr("{address}"), {{
+    onEnter: function(args) {{
+        console.log("[+] Called {name} at " + this.context.pc);
+        // Add argument parsing here based on calling convention
+        // e.g. console.log("Arg0: " + args[0]);
+    }},
+    onLeave: function(retval) {{
+        console.log("[-] {name} returned: " + retval);
+    }}
+}});
+"""
+        return {"script": script}
+    except Exception as e:
+        return handle_error(e)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONSOLIDATED ROUTER TOOLS (Limit Bypass)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3189,7 +3255,7 @@ async def session_management_tools(
 
 @mcp.tool()
 async def function_navigation_tools(
-    action: Literal["get_function", "get_current_address", "get_current_function", "get_xrefs", "get_callees", "get_callers", "list_functions"],
+    action: Literal["get_function", "get_current_address", "get_current_function", "get_xrefs", "get_callees", "get_callers", "list_functions", "get_complexity"],
     session_id: str, address: str = None, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None
 ) -> Any:
     """Consolidated router for binary navigation and cross-reference mapping."""
@@ -3200,6 +3266,7 @@ async def function_navigation_tools(
     elif action == "get_callees": return await get_callees(session_id, address)
     elif action == "get_callers": return await get_callers(session_id, address)
     elif action == "list_functions": return await list_functions(session_id, offset, limit, filter_str)
+    elif action == "get_complexity": return await get_complexity(session_id, address)
 
 @mcp.tool()
 async def binary_extraction_tools(
@@ -3215,7 +3282,7 @@ async def binary_extraction_tools(
 
 @mcp.tool()
 async def decompilation_tools(
-    action: Literal["decompile_function", "disassemble_at", "batch_decompile", "analyze_functions"],
+    action: Literal["decompile_function", "disassemble_at", "batch_decompile", "analyze_functions", "extract_microcode"],
     session_id: str, address: str = None, addresses: list = None
 ) -> Any:
     """Consolidated router for fetching assembly and decompiled pseudo-code."""
@@ -3223,6 +3290,7 @@ async def decompilation_tools(
     elif action == "disassemble_at": return await disassemble_at(session_id, address)
     elif action == "batch_decompile": return await batch_decompile(session_id, addresses)
     elif action == "analyze_functions": return await analyze_functions(session_id, addresses)
+    elif action == "extract_microcode": return await extract_microcode(session_id, address)
 
 @mcp.tool()
 async def memory_debugging_tools(
@@ -3256,7 +3324,7 @@ async def modification_tools(
 
 @mcp.tool()
 async def structural_tools(
-    action: Literal["get_stack_frame_variables", "list_local_types", "get_defined_structures", "analyze_struct_detailed", "get_xrefs_to_field", "declare_c_type", "define_struct"],
+    action: Literal["get_stack_frame_variables", "list_local_types", "get_defined_structures", "analyze_struct_detailed", "get_xrefs_to_field", "declare_c_type", "define_struct", "guess_struct"],
     session_id: str, address: str = None, struct_name: str = None, field_name: str = None, name: str = None, c_declaration: str = None, fields: list = None
 ) -> Any:
     """Consolidated router for analyzing and creating memory structures and frames."""
@@ -3267,6 +3335,7 @@ async def structural_tools(
     elif action == "get_xrefs_to_field": return await get_xrefs_to_field(session_id, struct_name, field_name)
     elif action == "declare_c_type": return await declare_c_type(session_id, c_declaration)
     elif action == "define_struct": return await define_struct(session_id, name, fields)
+    elif action == "guess_struct": return await guess_struct(session_id, address)
 
 @mcp.tool()
 async def signature_scanning_tools(
@@ -3344,7 +3413,7 @@ async def export_sync_tools(
 
 @mcp.tool()
 async def frida_scripting_tools(
-    action: Literal["list_frida_snippets", "render_frida_snippet", "save_frida_snippet", "instrument_execution"],
+    action: Literal["list_frida_snippets", "render_frida_snippet", "save_frida_snippet", "instrument_execution", "auto_frida_hook_generator"],
     session_id: str = None, javascript_code: str = None, snippet_name: str = None, address: str = "", func_name: str = "", name: str = None, description: str = None, template: str = None
 ) -> Any:
     """Consolidated router for Frida dynamic instrumentation templates and execution."""
@@ -3352,6 +3421,7 @@ async def frida_scripting_tools(
     elif action == "render_frida_snippet": return render_frida_snippet(snippet_name, address, func_name)
     elif action == "save_frida_snippet": return save_frida_snippet(name, description, template)
     elif action == "instrument_execution": return await instrument_execution(session_id, javascript_code)
+    elif action == "auto_frida_hook_generator": return await auto_frida_hook_generator(session_id, address)
 
 @mcp.tool()
 def knowledge_base_tools(

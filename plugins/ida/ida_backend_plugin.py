@@ -138,6 +138,98 @@ class IdaOperations:
                 out.append(f"{hex(head)}: {mnem}")
         return "\n".join(out)
 
+    @staticmethod
+    def extract_microcode(address):
+        addr = int(address, 16)
+        f = idaapi.get_func(addr)
+        if not f:
+            return "No function found at address"
+        try:
+            import ida_hexrays
+            if not ida_hexrays.init_hexrays_plugin():
+                return "HexRays plugin not available"
+            hf = ida_hexrays.hexrays_failure_t()
+            mba = ida_hexrays.gen_microcode(f, hf, None, ida_hexrays.DECOMP_NO_WAIT, ida_hexrays.MMAT_LOCOPT)
+            if not mba:
+                return f"Microcode generation failed: {hf.desc()}"
+            
+            # Simple text representation of microcode blocks
+            out = []
+            for blk_idx in range(mba.qty):
+                blk = mba.get_mblock(blk_idx)
+                out.append(f"Block {blk_idx} (start: {hex(blk.start)}):")
+                ins = blk.head
+                while ins:
+                    out.append(f"  {ins._print()}")
+                    ins = ins.next
+            return "\n".join(out)
+        except Exception as e:
+            return f"Microcode error: {e}"
+
+    @staticmethod
+    def get_complexity(address):
+        addr = int(address, 16)
+        f = idaapi.get_func(addr)
+        if not f:
+            return {"error": "No function found"}
+        import ida_gdl
+        fc = ida_gdl.qflow_chart_t("", f, idaapi.BADADDR, idaapi.BADADDR, 0)
+        edges = 0
+        for i in range(fc.size()):
+            blk = fc.n(i)
+            for j in range(fc.nsucc(i)):
+                edges += 1
+        
+        nodes = fc.size()
+        complexity = edges - nodes + 2
+        return {
+            "cyclomatic_complexity": complexity,
+            "basic_blocks": nodes,
+            "edges": edges
+        }
+
+    @staticmethod
+    def guess_struct(address):
+        addr = int(address, 16)
+        f = idaapi.get_func(addr)
+        if not f:
+            return "No function found"
+        try:
+            import ida_hexrays
+            if not ida_hexrays.init_hexrays_plugin():
+                return "HexRays plugin not available"
+            cfunc = ida_hexrays.decompile(f)
+            if not cfunc:
+                return "Decompilation failed"
+            
+            offsets = set()
+            class PtrOffsetVisitor(ida_hexrays.ctree_visitor_t):
+                def __init__(self):
+                    ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+                def visit_expr(self, e):
+                    if e.op == ida_hexrays.cot_memptr:
+                        offsets.add(e.m)
+                    return 0
+
+            visitor = PtrOffsetVisitor()
+            visitor.apply_to(cfunc.body, None)
+            
+            if not offsets:
+                return "No pointer member offsets found."
+            
+            offsets = sorted(list(offsets))
+            struct_str = "struct guessed_struct {\n"
+            last_offset = 0
+            for off in offsets:
+                if off > last_offset:
+                    struct_str += f"    char pad_{last_offset}[{off - last_offset}];\n"
+                struct_str += f"    void* field_{off};\n"
+                last_offset = off + 8 # Assuming 64-bit pointers
+            struct_str += "};\n"
+            return struct_str
+        except Exception as e:
+            return f"Struct recovery error: {e}"
+
     # ── Cross-References ──────────────────────────────────────────────────
 
     @staticmethod
@@ -1299,6 +1391,22 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 result = {
                     "code": IdaOperations._execute_sync(
                         IdaOperations.disassemble, args.get("address")
+                    )
+                }
+            elif action == "extract_microcode":
+                result = {
+                    "microcode": IdaOperations._execute_sync(
+                        IdaOperations.extract_microcode, args.get("address")
+                    )
+                }
+            elif action == "get_complexity":
+                result = IdaOperations._execute_sync(
+                    IdaOperations.get_complexity, args.get("address")
+                )
+            elif action == "guess_struct":
+                result = {
+                    "struct": IdaOperations._execute_sync(
+                        IdaOperations.guess_struct, args.get("address")
                     )
                 }
 
