@@ -582,8 +582,16 @@ def auto_update_silent():
 
         if did_update:
             uv_exe = os.path.join(root_dir, ".venv", "Scripts", "uv.exe") if platform.system() == "Windows" else os.path.join(root_dir, ".venv", "bin", "uv")
-            if os.path.exists(uv_exe): subprocess.run([uv_exe, "sync"], capture_output=True, cwd=root_dir)
-            else: subprocess.run(["uv", "sync"], capture_output=True, cwd=root_dir)
+            if os.path.exists(uv_exe): 
+                subprocess.run([uv_exe, "sync"], capture_output=True, cwd=root_dir)
+            else: 
+                try:
+                    subprocess.run(["uv", "sync"], capture_output=True, cwd=root_dir, check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    import sys
+                    subprocess.run([sys.executable, "-m", "pip", "install", "uv"], capture_output=True)
+                    subprocess.run([sys.executable, "-m", "uv", "sync"], capture_output=True, cwd=root_dir)
+            import sys
             os.execl(sys.executable, sys.executable, *sys.argv)
             
     except Exception:

@@ -54,8 +54,13 @@ if exist ".venv\Scripts\uv.exe" (
     if !errorlevel! equ 0 (
         uv sync
     ) else (
-        echo [!] 'uv' package manager not found. Make sure you have installed it.
-        echo Run: pip install uv
+        echo [i] 'uv' package manager not found. Installing it now...
+        python -m pip install uv
+        if !errorlevel! equ 0 (
+            python -m uv sync
+        ) else (
+            echo [!] Failed to install uv. Please run 'pip install uv' manually.
+        )
     )
 )
 
