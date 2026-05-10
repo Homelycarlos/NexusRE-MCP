@@ -2538,7 +2538,8 @@ async def auto_annotate(session_id: str, limit: int = 200, min_confidence: float
         # Try batch decompilation first (10x faster on Ghidra)
         if hasattr(adapter, 'batch_decompile') and session and session.backend == "ghidra":
             try:
-                batch_results = await adapter.batch_decompile(addresses[:limit])
+                batch_addrs = addresses if limit <= 0 else addresses[:limit]
+                batch_results = await adapter.batch_decompile(batch_addrs)
                 if isinstance(batch_results, dict):
                     decompiled = batch_results
                 elif isinstance(batch_results, list):
@@ -2748,7 +2749,8 @@ async def vuln_scan(session_id: str, limit: int = 100) -> Any:
 
         if hasattr(adapter, 'batch_decompile'):
             try:
-                batch = await adapter.batch_decompile(addresses[:limit])
+                batch_addrs = addresses if limit <= 0 else addresses[:limit]
+                batch = await adapter.batch_decompile(batch_addrs)
                 if isinstance(batch, dict):
                     decompiled = batch
             except Exception:
@@ -2922,7 +2924,8 @@ async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
         annotations = []
         decompiled_count = 0
 
-        for func in funcs[:limit]:
+        target_funcs = funcs if limit <= 0 else funcs[:limit]
+        for func in target_funcs:
             addr = func.get("address", "")
             name = func.get("name", "")
 
@@ -2959,7 +2962,9 @@ async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
         # Step 4: Vulnerability scan
         from .vuln_scanner import scan_function, generate_report
         all_findings = []
-        for func in funcs[:limit]:
+        
+        target_funcs = funcs if limit <= 0 else funcs[:limit]
+        for func in target_funcs:
             addr = func.get("address", "")
             name = func.get("name", "")
             cache_key = f"{session_id}:decomp:{addr}"
