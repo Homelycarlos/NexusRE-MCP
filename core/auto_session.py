@@ -17,6 +17,7 @@ DEFAULT_BACKENDS = {
     "x64dbg":       {"port": 10103, "arch": "x86_64"},
     "binja":        {"port": 10104, "arch": "x86_64"},
     "cheatengine":  {"port": 10105, "arch": "x86_64"},
+    "exdnspy":      {"port": 10106, "arch": "x86_64"},
 }
 
 

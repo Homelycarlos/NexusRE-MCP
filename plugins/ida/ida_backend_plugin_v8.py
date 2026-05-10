@@ -53,15 +53,6 @@ class IdaOperations:
     # ── Core Navigation ───────────────────────────────────────────────────
 
     @staticmethod
-    def get_ida_version():
-        try:
-            if hasattr(idaapi, "IDA_SDK_VERSION"):
-                return int(idaapi.IDA_SDK_VERSION)
-            return 700
-        except Exception:
-            return 700
-
-    @staticmethod
     def get_current_address():
         ea = idaapi.get_screen_ea()
         return hex(ea) if ea != idaapi.BADADDR else None
@@ -673,15 +664,14 @@ class IdaOperations:
                             for x in udt
                         ]
                 except AttributeError:
-                    # Fallback for IDA <= 8.x: get_udt_details might not exist or work
-                    if IdaOperations.get_ida_version() <= 830:
-                        import ida_struct
-                        struct_id = ida_struct.get_struc_id(tif.get_type_name())
-                        if struct_id != idaapi.BADADDR:
-                            struc = ida_struct.get_struc(struct_id)
-                            if struc:
-                                for offset in range(0, ida_struct.get_struc_size(struc)):
-                                    member = ida_struct.get_member(struc, offset)
+                    import ida_struct
+                    # Fallback for IDA 8: get_udt_details might not exist or work
+                    struct_id = ida_struct.get_struc_id(tif.get_type_name())
+                    if struct_id != idaapi.BADADDR:
+                        struc = ida_struct.get_struc(struct_id)
+                        if struc:
+                            for offset in range(0, ida_struct.get_struc_size(struc)):
+                                member = ida_struct.get_member(struc, offset)
                                 if member:
                                     name = ida_struct.get_member_name(member.id)
                                     if name and offset == member.soff:

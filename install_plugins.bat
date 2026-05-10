@@ -12,7 +12,7 @@ set INSTALLED=0
 
 REM ── IDA Pro ──────────────────────────────────────────────────────────────
 
-echo [*] Searching for IDA Pro...
+echo [36m[*][0m Searching for IDA Pro...
 
 set "IDA_PLUGIN=%SCRIPT_DIR%plugins\ida\ida_backend_plugin.py"
 
@@ -45,17 +45,19 @@ for /f "tokens=2*" %%A in ('reg query "HKCU\Software\Hex-Rays\IDA" /v "InstallDi
     )
 )
 
-echo     [!] IDA Pro not found. Skipping.
+echo     [31m[!][0m IDA Pro not found. Skipping.
 goto :ida_done
 
 :ida_found
-echo     [+] Found IDA Pro at: !IDA_FOUND!
+echo      [32m[+] [0m Found IDA Pro at: !IDA_FOUND!
+if exist "!IDA_FOUND!\ida_backend_plugin.py" ( copy /Y "!IDA_FOUND!\ida_backend_plugin.py" "!IDA_FOUND!\ida_backend_plugin.py.bak" >nul 2>&1 )
 copy /Y "%IDA_PLUGIN%" "!IDA_FOUND!\ida_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied ida_backend_plugin.py
+    echo      [32m[OK] [0m Copied ida_backend_plugin.py
+    certutil -hashfile "!IDA_FOUND!\ida_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
     set /a INSTALLED+=1
 ) else (
-    echo     [!] Failed to copy. Try running as Administrator.
+    echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )
 
 :ida_done
@@ -63,7 +65,7 @@ if !errorlevel! EQU 0 (
 REM ── Ghidra ───────────────────────────────────────────────────────────────
 
 echo.
-echo [*] Searching for Ghidra...
+echo  [36m[*] [0m Searching for Ghidra...
 
 set "GHIDRA_PLUGIN=%SCRIPT_DIR%plugins\ghidra\ghidra_backend_plugin.py"
 set "GHIDRA_FOUND="
@@ -99,26 +101,30 @@ for %%D in (
 )
 
 REM Fallback: create user scripts dir
-echo     [!] Ghidra not found in standard paths.
-echo     [+] Creating user scripts directory at %USERPROFILE%\ghidra_scripts
+echo      [31m[!] [0m Ghidra not found in standard paths.
+echo      [32m[+] [0m Creating user scripts directory at %USERPROFILE%\ghidra_scripts
 mkdir "%USERPROFILE%\ghidra_scripts" 2>nul
 set "GHIDRA_FOUND=%USERPROFILE%\ghidra_scripts"
 
 :ghidra_found
-echo     [+] Ghidra scripts at: !GHIDRA_FOUND!
+echo      [32m[+] [0m Ghidra scripts at: !GHIDRA_FOUND!
 REM Deploy Java version (works on ALL Ghidra installs - no PyGhidra needed)
 set "GHIDRA_JAVA_PLUGIN=%SCRIPT_DIR%plugins\ghidra\ghidra_backend_plugin.java"
 if exist "!GHIDRA_JAVA_PLUGIN!" (
-    copy /Y "!GHIDRA_JAVA_PLUGIN!" "!GHIDRA_FOUND!\ghidra_backend_plugin.java" >nul 2>&1
+    if exist "!GHIDRA_FOUND!\ghidra_backend_plugin.java" ( copy /Y "!GHIDRA_FOUND!\ghidra_backend_plugin.java" "!GHIDRA_FOUND!\ghidra_backend_plugin.java.bak" >nul 2>&1 )
+copy /Y "!GHIDRA_JAVA_PLUGIN!" "!GHIDRA_FOUND!\ghidra_backend_plugin.java" >nul 2>&1
     if !errorlevel! EQU 0 (
-        echo     [OK] Copied ghidra_backend_plugin.java ^(universal - works without PyGhidra^)
+        echo      [32m[OK] [0m Copied ghidra_backend_plugin.java ^(universal - works without PyGhidra^)
+        certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.java" SHA256 >> "!LOG!" 2>&1
     )
 )
 REM Also deploy Python version as fallback for PyGhidra users
+if exist "!GHIDRA_FOUND!\ghidra_backend_plugin.py" ( copy /Y "!GHIDRA_FOUND!\ghidra_backend_plugin.py" "!GHIDRA_FOUND!\ghidra_backend_plugin.py.bak" >nul 2>&1 )
 copy /Y "%GHIDRA_PLUGIN%" "!GHIDRA_FOUND!\ghidra_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied ghidra_backend_plugin.py ^(requires PyGhidra^)
-    echo     [i] Use the .java version if Python is not available in Ghidra.
+    echo      [32m[OK] [0m Copied ghidra_backend_plugin.py ^(requires PyGhidra^)
+    certutil -hashfile "!GHIDRA_FOUND!\ghidra_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
+    echo      [33m[i] [0m Use the .java version if Python is not available in Ghidra.
     set /a INSTALLED+=1
 ) else (
     echo     [^!] Failed to copy.
@@ -127,7 +133,7 @@ if !errorlevel! EQU 0 (
 REM ── x64dbg ──────────────────────────────────────────────────────────────
 
 echo.
-echo [*] Searching for x64dbg...
+echo  [36m[*] [0m Searching for x64dbg...
 
 set "X64DBG_PLUGIN=%SCRIPT_DIR%plugins\x64dbg\x64dbg_backend_plugin.py"
 set "X64DBG_FOUND="
@@ -157,18 +163,20 @@ for %%D in (
     )
 )
 
-echo     [!] x64dbg not found. Skipping.
+echo      [31m[!] [0m x64dbg not found. Skipping.
 goto :x64dbg_done
 
 :x64dbg_found
-echo     [+] Found x64dbg at: !X64DBG_FOUND!
+echo      [32m[+] [0m Found x64dbg at: !X64DBG_FOUND!
+if exist "!X64DBG_FOUND!\x64dbg_backend_plugin.py" ( copy /Y "!X64DBG_FOUND!\x64dbg_backend_plugin.py" "!X64DBG_FOUND!\x64dbg_backend_plugin.py.bak" >nul 2>&1 )
 copy /Y "%X64DBG_PLUGIN%" "!X64DBG_FOUND!\x64dbg_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied x64dbg_backend_plugin.py
-    echo     [i] Make sure x64dbgpy is installed for Python support.
+    echo      [32m[OK] [0m Copied x64dbg_backend_plugin.py
+    certutil -hashfile "!X64DBG_FOUND!\x64dbg_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
+    echo      [33m[i] [0m Make sure x64dbgpy is installed for Python support.
     set /a INSTALLED+=1
 ) else (
-    echo     [!] Failed to copy. Try running as Administrator.
+    echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )
 
 :x64dbg_done
@@ -176,7 +184,7 @@ if !errorlevel! EQU 0 (
 REM ── Binary Ninja ────────────────────────────────────────────────────────
 
 echo.
-echo [*] Searching for Binary Ninja...
+echo [36m[*][0m Searching for Binary Ninja...
 
 set "BINJA_PLUGIN=%SCRIPT_DIR%plugins\binja\binja_backend_plugin.py"
 set "BINJA_FOUND="
@@ -197,17 +205,19 @@ for %%D in (
     )
 )
 
-echo     [!] Binary Ninja not found. Skipping.
+echo     [31m[!][0m Binary Ninja not found. Skipping.
 goto :binja_done
 
 :binja_found
-echo     [+] Found Binary Ninja at: !BINJA_FOUND!
+echo      [32m[+] [0m Found Binary Ninja at: !BINJA_FOUND!
+if exist "!BINJA_FOUND!\binja_backend_plugin.py" ( copy /Y "!BINJA_FOUND!\binja_backend_plugin.py" "!BINJA_FOUND!\binja_backend_plugin.py.bak" >nul 2>&1 )
 copy /Y "%BINJA_PLUGIN%" "!BINJA_FOUND!\binja_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied binja_backend_plugin.py
+    echo      [32m[OK] [0m Copied binja_backend_plugin.py
+    certutil -hashfile "!BINJA_FOUND!\binja_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
     set /a INSTALLED+=1
 ) else (
-    echo     [!] Failed to copy.
+    echo      [31m[!] [0m Failed to copy.
 )
 
 :binja_done
@@ -215,7 +225,7 @@ if !errorlevel! EQU 0 (
 REM ── Cheat Engine ────────────────────────────────────────────────────────
 
 echo.
-echo [*] Searching for Cheat Engine...
+echo  [36m[*] [0m Searching for Cheat Engine...
 
 set "CE_PLUGIN=%SCRIPT_DIR%plugins\ce\ce_backend_plugin.lua"
 set "CE_FOUND="
@@ -233,17 +243,19 @@ for %%D in (
     )
 )
 
-echo     [!] Cheat Engine not found. Skipping.
+echo      [31m[!] [0m Cheat Engine not found. Skipping.
 goto :ce_done
 
 :ce_found
-echo     [+] Found Cheat Engine at: !CE_FOUND!
+echo      [32m[+] [0m Found Cheat Engine at: !CE_FOUND!
+if exist "!CE_FOUND!\ce_backend_plugin.lua" ( copy /Y "!CE_FOUND!\ce_backend_plugin.lua" "!CE_FOUND!\ce_backend_plugin.lua.bak" >nul 2>&1 )
 copy /Y "%CE_PLUGIN%" "!CE_FOUND!\ce_backend_plugin.lua" >nul 2>&1
 if !errorlevel! EQU 0 (
-    echo     [OK] Copied ce_backend_plugin.lua to autorun
+    echo      [32m[OK] [0m Copied ce_backend_plugin.lua to autorun
+    certutil -hashfile "!CE_FOUND!\ce_backend_plugin.lua" SHA256 >> "!LOG!" 2>&1
     set /a INSTALLED+=1
 ) else (
-    echo     [!] Failed to copy. Try running as Administrator.
+    echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )
 
 REM ── Create File-IPC directory for zero-dependency fallback ──
@@ -251,27 +263,27 @@ set "CE_ROOT=!CE_FOUND:\autorun=!"
 set "IPC_DIR=!CE_ROOT!\nexusre_ipc"
 if not exist "!IPC_DIR!" (
     mkdir "!IPC_DIR!" 2>nul
-    echo     [OK] Created file-IPC directory: !IPC_DIR!
+    echo     [32m[OK][0m Created file-IPC directory: !IPC_DIR!
 )
 
 REM ── Check for luasocket and attempt auto-install ──
-echo     [*] Checking for luasocket (socket/core.dll)...
+echo     [36m[*][0m Checking for luasocket (socket/core.dll)...
 set "CLIBS_DIR=!CE_ROOT!\clibs64"
 set "SOCKET_DLL=!CLIBS_DIR!\socket\core.dll"
 
 if exist "!SOCKET_DLL!" (
-    echo     [OK] luasocket already installed at !CLIBS_DIR!
+    echo     [32m[OK][0m luasocket already installed at !CLIBS_DIR!
 ) else (
     REM Check alternative locations
     if exist "!CE_ROOT!\socket\core.dll" (
-        echo     [OK] luasocket found at !CE_ROOT!\socket\
+        echo     [32m[OK][0m luasocket found at !CE_ROOT!\socket\
     ) else (
         echo     [^!] luasocket NOT found. The plugin will use file-based IPC instead.
-        echo     [i] For best performance, install luasocket manually:
+        echo     [33m[i][0m For best performance, install luasocket manually:
         echo         1. Download socket/core.dll for Lua 5.3 ^(64-bit^)
         echo         2. Place it in: !CLIBS_DIR!\socket\core.dll
         echo         3. Restart Cheat Engine
-        echo     [i] The plugin still works without luasocket using file IPC.
+        echo     [33m[i][0m The plugin still works without luasocket using file IPC.
     )
 )
 

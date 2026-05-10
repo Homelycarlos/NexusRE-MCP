@@ -278,6 +278,7 @@ def setup_wizard():
     for v in ["8.3", "8.4", "9.0", "9.1"]:
         ida_paths.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}"))
         ida_paths.append(os.path.join("C:\\", f"IDA Pro {v}"))
+        ida_paths.append(os.path.join("C:\\", f"IDA Professional {v}"))
     for p in ida_paths:
         if os.path.exists(p):
             tools_found.append(("IDA Pro", p))
@@ -370,6 +371,7 @@ def install_plugins_silent():
         ida_targets.append(os.path.join(appdata, "Hex-Rays", "IDA Pro", "plugins"))
     for v in ["8.3", "8.4", "9.0", "9.1"]:
         ida_targets.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}", "plugins"))
+        ida_targets.append(os.path.join("C:\\", f"IDA Professional {v}", "plugins"))
     for target in ida_targets:
         if os.path.isdir(target):
             src = os.path.join(plugins_dir, "ida", "ida_backend_plugin.py")
@@ -515,8 +517,9 @@ Usage:
 Supported Backends:
   - ida          (Port 10101)    - ghidra       (Port 10102)
   - x64dbg       (Port 10103)    - binja        (Port 10104)
-  - cheatengine  (Port 10105)    - radare2      (Headless)
-  - frida        (Headless)      - kernel       (Headless)
+  - cheatengine  (Port 10105)    - exdnspy      (Port 10106)
+  - radare2      (Headless)      - frida        (Headless)
+  - kernel       (Headless)
 """)
     sys.exit(0)
 

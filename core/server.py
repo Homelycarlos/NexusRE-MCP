@@ -143,7 +143,7 @@ def set_default_session(session_id: str) -> Any:
 def check_backends() -> Any:
     """Ping all known backend ports (10101-10105) and report which are alive."""
     import socket
-    ports = {"ida": 10101, "ghidra": 10102, "x64dbg": 10103, "binja": 10104, "cheatengine": 10105}
+    ports = {"ida": 10101, "ghidra": 10102, "x64dbg": 10103, "binja": 10104, "cheatengine": 10105, "exdnspy": 10106}
     results = {}
     for name, port in ports.items():
         try:

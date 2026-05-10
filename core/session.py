@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 SUPPORTED_BACKENDS = [
     "ida", "ghidra", "x64dbg", "binja", "radare2",
-    "frida", "cheatengine", "gdb", "kernel", "dma"
+    "frida", "cheatengine", "gdb", "kernel", "dma", "exdnspy"
 ]
 
 DEFAULT_PORTS = {
@@ -12,6 +12,7 @@ DEFAULT_PORTS = {
     "x64dbg": 10103,
     "binja": 10104,
     "cheatengine": 10105,
+    "exdnspy": 10106,
 }
 
 class SessionState(BaseModel):
