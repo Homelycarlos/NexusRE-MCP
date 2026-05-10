@@ -267,13 +267,22 @@ namespace NexusRE.Exdnspy
                 return new { code = $"// Disassembly requires dnSpy runtime — address {address}" };
             }
 
-            // Fallback: simple IL dump using System.Reflection
+            // Fallback: IL dump using System.Reflection and System.Reflection.Emit.OpCodes
             if (!string.IsNullOrEmpty(_loadedBinary) && File.Exists(_loadedBinary))
             {
                 try
                 {
                     var asm = Assembly.LoadFrom(_loadedBinary);
                     int token = Convert.ToInt32(address, 16);
+                    
+                    // Create an opcode lookup dictionary for fast mapping
+                    var opcodes = new Dictionary<short, System.Reflection.Emit.OpCode>();
+                    foreach (var field in typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+                    {
+                        var opcode = (System.Reflection.Emit.OpCode)field.GetValue(null);
+                        opcodes[opcode.Value] = opcode;
+                    }
+
                     foreach (var module in asm.GetModules())
                     {
                         try
@@ -289,9 +298,94 @@ namespace NexusRE.Exdnspy
                                     {
                                         var sb = new StringBuilder();
                                         sb.AppendLine($"// IL Disassembly for {methodBase.Name}");
-                                        for (int i = 0; i < il.Length; i++)
+                                        
+                                        int i = 0;
+                                        while (i < il.Length)
                                         {
-                                            sb.AppendLine($"IL_{i:X4}: 0x{il[i]:X2}");
+                                            int offset = i;
+                                            short opValue = il[i++];
+                                            
+                                            // Handle multi-byte opcodes (prefix 0xFE)
+                                            if (opValue == 0xFE && i < il.Length)
+                                            {
+                                                opValue = (short)((opValue << 8) | il[i++]);
+                                            }
+
+                                            if (opcodes.TryGetValue(opValue, out var opcode))
+                                            {
+                                                sb.Append($"IL_{offset:X4}: {opcode.Name,-10}");
+                                                
+                                                // Simplified operand parsing based on operand type length
+                                                switch (opcode.OperandType)
+                                                {
+                                                    case System.Reflection.Emit.OperandType.InlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.InlineField:
+                                                    case System.Reflection.Emit.OperandType.InlineI:
+                                                    case System.Reflection.Emit.OperandType.InlineMethod:
+                                                    case System.Reflection.Emit.OperandType.InlineSig:
+                                                    case System.Reflection.Emit.OperandType.InlineString:
+                                                    case System.Reflection.Emit.OperandType.InlineSwitch:
+                                                    case System.Reflection.Emit.OperandType.InlineTok:
+                                                    case System.Reflection.Emit.OperandType.InlineType:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineR:
+                                                        if (i + 4 <= il.Length)
+                                                        {
+                                                            int operand = BitConverter.ToInt32(il, i);
+                                                            if (opcode.OperandType == System.Reflection.Emit.OperandType.InlineString) {
+                                                                try {
+                                                                     sb.Append($" \"{module.ResolveString(operand)}\"");
+                                                                } catch {
+                                                                     sb.Append($" 0x{operand:X8}");
+                                                                }
+                                                            } else if (opcode.OperandType == System.Reflection.Emit.OperandType.InlineMethod || opcode.OperandType == System.Reflection.Emit.OperandType.InlineField || opcode.OperandType == System.Reflection.Emit.OperandType.InlineType) {
+                                                                try {
+                                                                     var member = module.ResolveMember(operand);
+                                                                     sb.Append($" {member.Name}");
+                                                                } catch {
+                                                                     sb.Append($" 0x{operand:X8}");
+                                                                }
+                                                            } else {
+                                                                sb.Append($" 0x{operand:X8}");
+                                                            }
+                                                            i += 4;
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineI8:
+                                                    case System.Reflection.Emit.OperandType.InlineR:
+                                                        if (i + 8 <= il.Length)
+                                                        {
+                                                            long operand = BitConverter.ToInt64(il, i);
+                                                            sb.Append($" 0x{operand:X16}");
+                                                            i += 8;
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.ShortInlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineI:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineVar:
+                                                        if (i + 1 <= il.Length)
+                                                        {
+                                                            byte operand = il[i++];
+                                                            sb.Append($" 0x{operand:X2}");
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineVar:
+                                                        if (i + 2 <= il.Length)
+                                                        {
+                                                            short operand = BitConverter.ToInt16(il, i);
+                                                            sb.Append($" 0x{operand:X4}");
+                                                            i += 2;
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineNone:
+                                                    default:
+                                                        break;
+                                                }
+                                                sb.AppendLine();
+                                            }
+                                            else
+                                            {
+                                                sb.AppendLine($"IL_{offset:X4}: 0x{opValue:X2}");
+                                            }
                                         }
                                         return new { code = sb.ToString() };
                                     }
@@ -309,7 +403,6 @@ namespace NexusRE.Exdnspy
 
         private static object GetXrefs(string address)
         {
-            // Simple xref search in IL bodies for the MethodToken
             var xrefs_to = new List<string>();
             var xrefs_from = new List<string>();
 
@@ -319,6 +412,15 @@ namespace NexusRE.Exdnspy
                 {
                     var asm = Assembly.LoadFrom(_loadedBinary);
                     int token = Convert.ToInt32(address, 16);
+                    
+                    // Create an opcode lookup dictionary for fast mapping
+                    var opcodes = new Dictionary<short, System.Reflection.Emit.OpCode>();
+                    foreach (var field in typeof(System.Reflection.Emit.OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+                    {
+                        var opcode = (System.Reflection.Emit.OpCode)field.GetValue(null);
+                        opcodes[opcode.Value] = opcode;
+                    }
+
                     foreach (var type in asm.GetTypes())
                     {
                         foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -331,18 +433,57 @@ namespace NexusRE.Exdnspy
                                     var il = body.GetILAsByteArray();
                                     if (il != null)
                                     {
-                                        for (int i = 0; i < il.Length - 4; i++)
+                                        int i = 0;
+                                        while (i < il.Length)
                                         {
-                                            if (il[i] == 0x28) // call
+                                            short opValue = il[i++];
+                                            if (opValue == 0xFE && i < il.Length)
                                             {
-                                                int operand = BitConverter.ToInt32(il, i + 1);
-                                                if (operand == token)
+                                                opValue = (short)((opValue << 8) | il[i++]);
+                                            }
+
+                                            if (opcodes.TryGetValue(opValue, out var opcode))
+                                            {
+                                                switch (opcode.OperandType)
                                                 {
-                                                    xrefs_to.Add($"0x{method.MetadataToken:X8}");
-                                                }
-                                                if (method.MetadataToken == token)
-                                                {
-                                                    xrefs_from.Add($"0x{operand:X8}");
+                                                    case System.Reflection.Emit.OperandType.InlineMethod:
+                                                    case System.Reflection.Emit.OperandType.InlineField:
+                                                    case System.Reflection.Emit.OperandType.InlineType:
+                                                    case System.Reflection.Emit.OperandType.InlineTok:
+                                                    case System.Reflection.Emit.OperandType.InlineString:
+                                                    case System.Reflection.Emit.OperandType.InlineSig:
+                                                        if (i + 4 <= il.Length)
+                                                        {
+                                                            int operand = BitConverter.ToInt32(il, i);
+                                                            if (operand == token)
+                                                            {
+                                                                xrefs_to.Add($"0x{method.MetadataToken:X8}");
+                                                            }
+                                                            if (method.MetadataToken == token)
+                                                            {
+                                                                xrefs_from.Add($"0x{operand:X8}");
+                                                            }
+                                                            i += 4;
+                                                        }
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.InlineI:
+                                                    case System.Reflection.Emit.OperandType.InlineSwitch:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineR:
+                                                        i += 4;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineI8:
+                                                    case System.Reflection.Emit.OperandType.InlineR:
+                                                        i += 8;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.ShortInlineBrTarget:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineI:
+                                                    case System.Reflection.Emit.OperandType.ShortInlineVar:
+                                                        i += 1;
+                                                        break;
+                                                    case System.Reflection.Emit.OperandType.InlineVar:
+                                                        i += 2;
+                                                        break;
                                                 }
                                             }
                                         }
@@ -391,19 +532,40 @@ namespace NexusRE.Exdnspy
             try
             {
                 long offset = Convert.ToInt64(address, 16);
+                
+                // Clean up hex string
+                hexBytes = hexBytes.Replace(" ", "").Replace("-", "").Trim();
+                if (hexBytes.Length % 2 != 0)
+                {
+                     return new { success = false, error = "Invalid hex string length." };
+                }
+
                 byte[] bytes = new byte[hexBytes.Length / 2];
                 for (int i = 0; i < bytes.Length; i++)
                 {
                     bytes[i] = Convert.ToByte(hexBytes.Substring(i * 2, 2), 16);
                 }
 
-                using (var fs = new FileStream(_loadedBinary, FileMode.Open, FileAccess.ReadWrite))
+                // Use FileShare.ReadWrite to attempt to write even if opened by another process (like dnSpy) if possible
+                using (var fs = new FileStream(_loadedBinary, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
                 {
+                    if (offset < 0 || offset >= fs.Length)
+                    {
+                        return new { success = false, error = $"Offset 0x{offset:X} is out of bounds." };
+                    }
                     fs.Seek(offset, SeekOrigin.Begin);
                     fs.Write(bytes, 0, bytes.Length);
                 }
 
                 return new { success = true };
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return new { success = false, error = "Access denied. Ensure you have permissions and the file isn't locked exclusively." };
+            }
+            catch (IOException ex)
+            {
+                return new { success = false, error = $"IO Error (File might be locked): {ex.Message}" };
             }
             catch (Exception ex)
             {

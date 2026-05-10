@@ -50,12 +50,33 @@ goto :ida_done
 
 :ida_found
 echo      [32m[+] [0m Found IDA Pro at: !IDA_FOUND!
-if exist "!IDA_FOUND!\ida_backend_plugin.py" ( copy /Y "!IDA_FOUND!\ida_backend_plugin.py" "!IDA_FOUND!\ida_backend_plugin.py.bak" >nul 2>&1 )
+for /f "tokens=2-4 delims=/ " %%a in ('date /t') do (set mydate=%%c%%a%%b)
+for /f "tokens=1-2 delims=/:" %%a in ('time /t') do (set mytime=%%a%%b)
+set mytime=%mytime: =0%
+set TIMESTAMP=%mydate%_%mytime%
+
+if exist "!IDA_FOUND!\ida_backend_plugin.py" ( copy /Y "!IDA_FOUND!\ida_backend_plugin.py" "!IDA_FOUND!\ida_backend_plugin.py.bak.!TIMESTAMP!" >nul 2>&1 )
 copy /Y "%IDA_PLUGIN%" "!IDA_FOUND!\ida_backend_plugin.py" >nul 2>&1
 if !errorlevel! EQU 0 (
     echo      [32m[OK] [0m Copied ida_backend_plugin.py
-    certutil -hashfile "!IDA_FOUND!\ida_backend_plugin.py" SHA256 >> "!LOG!" 2>&1
-    set /a INSTALLED+=1
+    
+    REM Integrity check
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "!IDA_FOUND!\ida_backend_plugin.py" SHA256') do (
+        if not defined DEST_HASH set DEST_HASH=%%H
+    )
+    for /f "skip=1 tokens=*" %%H in ('certutil -hashfile "%IDA_PLUGIN%" SHA256') do (
+        if not defined SRC_HASH set SRC_HASH=%%H
+    )
+    
+    if "!SRC_HASH!"=="!DEST_HASH!" (
+        echo      [32m[OK] [0m Integrity check passed.
+        set /a INSTALLED+=1
+    ) else (
+        echo      [31m[!] [0m Integrity check failed! Rolling back...
+        if exist "!IDA_FOUND!\ida_backend_plugin.py.bak.!TIMESTAMP!" (
+            copy /Y "!IDA_FOUND!\ida_backend_plugin.py.bak.!TIMESTAMP!" "!IDA_FOUND!\ida_backend_plugin.py" >nul 2>&1
+        )
+    )
 ) else (
     echo      [31m[!] [0m Failed to copy. Try running as Administrator.
 )
