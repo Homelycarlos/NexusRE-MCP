@@ -1,5 +1,0 @@
-C:\Users\cmb16\.gemini\antigravity\scratch\NexusRE-MCP\plugins\exdnspy\obj\Release\net6.0\NexusRE.Exdnspy.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\cmb16\.gemini\antigravity\scratch\NexusRE-MCP\plugins\exdnspy\obj\Release\net6.0\NexusRE.Exdnspy.AssemblyInfoInputs.cache
-C:\Users\cmb16\.gemini\antigravity\scratch\NexusRE-MCP\plugins\exdnspy\obj\Release\net6.0\NexusRE.Exdnspy.AssemblyInfo.cs
-C:\Users\cmb16\.gemini\antigravity\scratch\NexusRE-MCP\plugins\exdnspy\obj\Release\net6.0\NexusRE.Exdnspy.csproj.CoreCompileInputs.cache
-C:\Users\cmb16\.gemini\antigravity\scratch\NexusRE-MCP\plugins\exdnspy\obj\Release\net6.0\NexusRE.Exdnspy.sourcelink.json

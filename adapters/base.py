@@ -15,9 +15,14 @@ class BaseAdapter(abc.ABC):
     async def _get_session(self):
         """Lazy load a persistent aiohttp.ClientSession to eliminate TCP handshakes."""
         import aiohttp
+        import os
         if not hasattr(self, '_session') or self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            headers = {}
+            token = os.environ.get("NEXUSRE_API_KEY")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            self._session = aiohttp.ClientSession(timeout=timeout, headers=headers)
         return self._session
 
     # ── Decompilation & Function Listing ──────────────────────────────────
@@ -126,4 +131,14 @@ class BaseAdapter(abc.ABC):
     @abc.abstractmethod
     async def save_binary(self, output_path: str) -> bool:
         """Save the patched binary back to the file system to keep changes."""
+        pass
+
+    @abc.abstractmethod
+    async def poll_events(self) -> List[dict]:
+        """Poll the backend for any asynchronous events (e.g., breakpoints, user actions)."""
+        pass
+
+    @abc.abstractmethod
+    async def pattern_scan(self, pattern: str) -> List[int]:
+        """Scan memory/binary for a specific byte pattern or string and return matching addresses."""
         pass

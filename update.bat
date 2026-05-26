@@ -13,7 +13,7 @@ where git >nul 2>&1
 if %errorlevel% equ 0 (
     if exist ".git" (
         echo [i] Git repository detected. Updating via git pull...
-        git pull
+        git pull origin master
         if !errorlevel! neq 0 (
             echo [!] Git pull failed. Please check your connection or resolve conflicts.
             pause

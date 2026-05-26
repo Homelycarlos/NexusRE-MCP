@@ -176,3 +176,9 @@ class BinjaAdapter(BaseAdapter):
     async def save_binary(self, output_path: str) -> bool:
         res = await self._call("binja_save_binary", {"output_path": output_path})
         return res.get("success", False)
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []

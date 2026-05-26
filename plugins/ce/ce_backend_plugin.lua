@@ -20,10 +20,31 @@ local BIND_ADDR = "127.0.0.1"
 local has_socket, socket = pcall(require, "socket")
 
 -- ── Command Dispatcher (shared by both backends) ────────────────────────────
+local function read_token_file()
+    local path = os.getenv("USERPROFILE")
+    if not path then return nil end
+    path = path .. "\\.nexusre\\auth_token"
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local token = f:read("*l")
+    f:close()
+    if token then return token:gsub("%s+", "") end
+    return nil
+end
+
 local function dispatch_command(req)
     local args = {}
     for word in string.gmatch(req, '([^|]+)') do
         table.insert(args, word)
+    end
+    
+    local expected_token = read_token_file()
+    if expected_token and #expected_token > 0 then
+        local token = args[1]
+        if token ~= expected_token then
+            return "ERROR|UNAUTHORIZED"
+        end
+        table.remove(args, 1)
     end
 
     local action = args[1]

@@ -80,6 +80,14 @@ class CheatEngineAdapter(BaseAdapter):
             while lock_file.exists() and (time.monotonic() - start) < timeout:
                 await asyncio.sleep(0.02)
 
+            token = ""
+            token_file = Path.home() / ".nexusre" / "auth_token"
+            if token_file.exists():
+                token = token_file.read_text().strip()
+                
+            if token:
+                payload = f"{token}|{payload}"
+
             # Write request
             request_file.write_text(payload, encoding="utf-8")
 
@@ -103,6 +111,15 @@ class CheatEngineAdapter(BaseAdapter):
     async def _send_raw(self, payload: str) -> str:
         """Send raw TCP payload to CE socket. Falls back to file IPC if TCP fails."""
         try:
+            token = ""
+            token_file = Path.home() / ".nexusre" / "auth_token"
+            if token_file.exists():
+                token = token_file.read_text().strip()
+                
+            # Prepend token
+            if token:
+                payload = f"{token}|{payload}"
+                
             reader, writer = await asyncio.open_connection(self.host, self.port)
             writer.write((payload + "\n").encode())
             await writer.drain()
@@ -119,13 +136,14 @@ class CheatEngineAdapter(BaseAdapter):
             return "ERROR|CONNECTION_FAILED"
 
     async def execute_lua(self, script: str) -> dict:
-        """Execute a raw Lua script inside the Cheat Engine environment via HTTP RPC."""
-        payload = {"action": "execute_lua", "script": script}
+        """Execute a raw Lua script inside the Cheat Engine environment."""
+        # Replace newlines so it can be sent via raw protocol
+        script_oneline = script.replace("\n", " ").replace("\r", " ")
         try:
-            session = await self._get_session()
-            async with session.post(f"{self.base_url}/", json=payload) as resp:
-                resp.raise_for_status()
-                return await resp.json()
+            res = await self._send_raw(f"EXECUTE_LUA|{script_oneline}")
+            if res.startswith("ERROR"):
+                return {"error": res}
+            return {"result": res}
         except Exception as e:
             return {"error": f"Failed connecting to Cheat Engine RPC: {e}"}
 
@@ -188,3 +206,17 @@ class CheatEngineAdapter(BaseAdapter):
     async def set_function_type(self, address: str, signature: str) -> bool: return False
     async def rename_local_variable(self, address: str, old_name: str, new_name: str) -> bool: return False
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool: return False
+
+    async def poll_events(self) -> list[dict]:
+        res = await self._send_raw("POLL_EVENTS")
+        if res and res != "ERROR|Empty Command":
+            import json
+            try: return json.loads(res)
+            except: pass
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        res = await self.scan_aob(pattern)
+        if res:
+            return [int(res, 16)]
+        return []

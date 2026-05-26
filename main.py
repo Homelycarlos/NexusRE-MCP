@@ -7,6 +7,7 @@ import platform
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.server import mcp
+from core.setup_scanner import deep_scan_for_re_tools, do_install_plugins
 
 
 def get_config_json() -> dict:
@@ -169,94 +170,11 @@ def auto_install():
 
 def install_plugins():
     """Auto-detect installed RE tools and copy the corresponding backend plugins."""
-    import shutil
-    import glob
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    plugins_dir = os.path.join(script_dir, "plugins")
-    installed = 0
-
-    # ── IDA Pro ──
-    ida_targets = []
-    appdata = os.environ.get("APPDATA", "")
-    if appdata:
-        ida_targets.append(os.path.join(appdata, "Hex-Rays", "IDA Pro", "plugins"))
-    for v in ["8.3", "8.4", "9.0"]:
-        ida_targets.append(os.path.join("C:\\", f"IDA Pro {v}", "plugins"))
-        ida_targets.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}", "plugins"))
-
-    for target in ida_targets:
-        if os.path.isdir(target):
-            src = os.path.join(plugins_dir, "ida", "ida_backend_plugin.py")
-            dst = os.path.join(target, "ida_backend_plugin.py")
-            shutil.copy2(src, dst)
-            print(f"[+] IDA Pro: Copied plugin to {target}")
-            installed += 1
-            break
-    else:
-        print("[!] IDA Pro not found. Skipping.")
-
-    # ── Ghidra ──
-    ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR", "")
-    ghidra_targets = []
-    if ghidra_dir:
-        ghidra_targets.append(os.path.join(ghidra_dir, "Ghidra", "Features", "Python", "ghidra_scripts"))
-    home = os.path.expanduser("~")
-    ghidra_targets.append(os.path.join(home, "ghidra_scripts"))
-
-    for target in ghidra_targets:
-        if os.path.isdir(target):
-            # Java plugin
-            src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
-            if os.path.exists(src_java):
-                shutil.copy2(src_java, os.path.join(target, "ghidra_backend_plugin.java"))
-            # Python plugin
-            src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-            if os.path.exists(src_py):
-                shutil.copy2(src_py, os.path.join(target, "ghidra_backend_plugin.py"))
-            print(f"[+] Ghidra: Copied plugins to {target}")
-            installed += 1
-            break
-    else:
-        # Create user scripts dir as fallback
-        fallback = os.path.join(home, "ghidra_scripts")
-        os.makedirs(fallback, exist_ok=True)
-        # Java plugin
-        src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
-        if os.path.exists(src_java):
-            shutil.copy2(src_java, os.path.join(fallback, "ghidra_backend_plugin.java"))
-        # Python plugin
-        src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-        if os.path.exists(src_py):
-            shutil.copy2(src_py, os.path.join(fallback, "ghidra_backend_plugin.py"))
-        print(f"[+] Ghidra: Created {fallback} and copied plugins. Add this to Script Manager.")
-        installed += 1
-
-    # ── Binary Ninja ──
-    binja_target = os.path.join(appdata, "Binary Ninja", "plugins") if appdata else ""
-    if binja_target and os.path.isdir(binja_target):
-        src = os.path.join(plugins_dir, "binja", "binja_backend_plugin.py")
-        shutil.copy2(src, os.path.join(binja_target, "binja_backend_plugin.py"))
-        print(f"[+] Binary Ninja: Copied plugin to {binja_target}")
-        installed += 1
-    else:
-        print("[!] Binary Ninja not found. Skipping.")
-
-    # ── Cheat Engine ──
-    for v in ["7.5", "7.4"]:
-        ce_path = os.path.join(os.environ.get("PROGRAMFILES", ""), f"Cheat Engine {v}", "autorun")
-        if os.path.isdir(ce_path):
-            src = os.path.join(plugins_dir, "ce", "ce_backend_plugin.lua")
-            shutil.copy2(src, os.path.join(ce_path, "ce_backend_plugin.lua"))
-            print(f"[+] Cheat Engine: Copied plugin to {ce_path}")
-            installed += 1
-            break
-    else:
-        print("[!] Cheat Engine not found. Skipping.")
-
+    print("[*] Scanning the entire computer for RE tools. This may take a few minutes...")
+    tools_found = deep_scan_for_re_tools()
+    installed = do_install_plugins(tools_found)
     print(f"\n[*] Installed {installed} plugin(s). Restart your RE tools for changes to take effect.")
     sys.exit(0)
-
 
 def setup_wizard():
     """One-command setup: detect tools, install plugins, inject MCP config."""
@@ -266,77 +184,23 @@ def setup_wizard():
     print("============================================")
     print("")
 
-    # Step 1: Detect installed RE tools
-    print("[1/4] Scanning for installed reverse engineering tools...")
-    tools_found = []
+    print("[1/4] Scanning the entire computer for reverse engineering tools...")
+    print("      (This may take a few minutes, please be patient)")
+    tools_found = deep_scan_for_re_tools()
+    
+    count = sum(1 for data in tools_found.values() if data["paths"])
+    print(f"\n  Found {count} tool types.\n")
+    for name, data in tools_found.items():
+        if not data["paths"]:
+            print(f"  [-] {name}: not found")
 
-    # IDA Pro
-    ida_paths = []
-    appdata = os.environ.get("APPDATA", "")
-    if appdata:
-        ida_paths.append(os.path.join(appdata, "Hex-Rays", "IDA Pro", "plugins"))
-    for v in ["8.3", "8.4", "9.0", "9.1"]:
-        ida_paths.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}"))
-        ida_paths.append(os.path.join("C:\\", f"IDA Pro {v}"))
-        ida_paths.append(os.path.join("C:\\", f"IDA Professional {v}"))
-    for p in ida_paths:
-        if os.path.exists(p):
-            tools_found.append(("IDA Pro", p))
-            print(f"  [+] IDA Pro found: {p}")
-            break
-    else:
-        print("  [-] IDA Pro: not found")
+    print("\n[2/4] Installing backend plugins...")
+    installed = do_install_plugins(tools_found, silent=False)
+    print(f"  Installed {installed} plugin(s).")
 
-    # Ghidra
-    ghidra_dir = os.environ.get("GHIDRA_INSTALL_DIR", "")
-    ghidra_paths = [ghidra_dir] if ghidra_dir else []
-    for drive in ["C:\\", "D:\\"]:
-        for name in ["ghidra", "Ghidra"]:
-            ghidra_paths.append(os.path.join(drive, name))
-    home = os.path.expanduser("~")
-    ghidra_paths.append(os.path.join(home, "ghidra_scripts"))
-    for p in ghidra_paths:
-        if os.path.exists(p):
-            tools_found.append(("Ghidra", p))
-            print(f"  [+] Ghidra found: {p}")
-            break
-    else:
-        print("  [-] Ghidra: not found")
-
-    # x64dbg
-    x64dbg_paths = [
-        os.path.join(os.environ.get("PROGRAMFILES", ""), "x64dbg"),
-        os.path.join("C:\\", "x64dbg"),
-        os.path.join(home, "x64dbg"),
-    ]
-    for p in x64dbg_paths:
-        if os.path.exists(p):
-            tools_found.append(("x64dbg", p))
-            print(f"  [+] x64dbg found: {p}")
-            break
-    else:
-        print("  [-] x64dbg: not found")
-
-    # Binary Ninja
-    if appdata:
-        binja_path = os.path.join(appdata, "Binary Ninja", "plugins")
-        if os.path.exists(binja_path):
-            tools_found.append(("Binary Ninja", binja_path))
-            print(f"  [+] Binary Ninja found: {binja_path}")
-        else:
-            print("  [-] Binary Ninja: not found")
-
-    print(f"\n  Found {len(tools_found)} tool(s).\n")
-
-    # Step 2: Install plugins
-    print("[2/4] Installing backend plugins...")
-    install_plugins_silent()
-
-    # Step 3: Inject MCP config
     print("\n[3/4] Configuring MCP clients...")
     auto_install_silent()
 
-    # Step 4: Probe running backends
     print("\n[4/4] Probing for running backends...")
     from core.auto_session import detect_running_backends
     backends = detect_running_backends()
@@ -356,50 +220,10 @@ def setup_wizard():
     print("")
     sys.exit(0)
 
-
 def install_plugins_silent():
     """Install plugins without sys.exit."""
-    import shutil
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    plugins_dir = os.path.join(script_dir, "plugins")
-    installed = 0
-
-    # IDA
-    appdata = os.environ.get("APPDATA", "")
-    ida_targets = []
-    if appdata:
-        ida_targets.append(os.path.join(appdata, "Hex-Rays", "IDA Pro", "plugins"))
-    for v in ["8.3", "8.4", "9.0", "9.1"]:
-        ida_targets.append(os.path.join(os.environ.get("PROGRAMFILES", ""), f"IDA Pro {v}", "plugins"))
-        ida_targets.append(os.path.join("C:\\", f"IDA Professional {v}", "plugins"))
-    for target in ida_targets:
-        if os.path.isdir(target):
-            src = os.path.join(plugins_dir, "ida", "ida_backend_plugin.py")
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(target, "ida_backend_plugin.py"))
-                print(f"  [+] IDA plugin -> {target}")
-                installed += 1
-            break
-
-    # Ghidra
-    home = os.path.expanduser("~")
-    ghidra_target = os.path.join(home, "ghidra_scripts")
-    os.makedirs(ghidra_target, exist_ok=True)
-    
-    # Java plugin
-    src_java = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.java")
-    if os.path.exists(src_java):
-        shutil.copy2(src_java, os.path.join(ghidra_target, "ghidra_backend_plugin.java"))
-    
-    # Python plugin
-    src_py = os.path.join(plugins_dir, "ghidra", "ghidra_backend_plugin.py")
-    if os.path.exists(src_py):
-        shutil.copy2(src_py, os.path.join(ghidra_target, "ghidra_backend_plugin.py"))
-        
-    print(f"  [+] Ghidra plugin(s) -> {ghidra_target}")
-    installed += 1
-
-    print(f"  Installed {installed} plugin(s).")
+    tools_found = deep_scan_for_re_tools()
+    do_install_plugins(tools_found, silent=True)
 
 
 def auto_install_silent():

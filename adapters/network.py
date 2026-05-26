@@ -67,3 +67,9 @@ class NetworkAdapter(BaseAdapter):
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool: return False
     async def patch_bytes(self, address: str, hex_bytes: str) -> bool: return False
     async def save_binary(self, output_path: str) -> bool: return False
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []

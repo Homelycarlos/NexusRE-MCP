@@ -14,7 +14,7 @@ PyGithub
 capstone
 unicorn
 pywin32
-vmmpy
+vmmpy; python_version < "3.12"
 angr
 pydivert
 glfw

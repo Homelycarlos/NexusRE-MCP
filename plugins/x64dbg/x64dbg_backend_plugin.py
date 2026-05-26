@@ -34,6 +34,25 @@ except ImportError:
 
 PORT = 10103
 
+EVENTS_QUEUE = []
+LAST_CIP = -1
+
+def check_x64dbg_events():
+    global LAST_CIP
+    if not HAS_X64DBG:
+        return
+    try:
+        from x64dbgpy.pluginsdk._scriptapi import register, debug
+        if debug.IsDebugging():
+            cip = register.GetCIP()
+            if cip != LAST_CIP and cip != 0:
+                EVENTS_QUEUE.append({"type": "breakpoint", "address": hex(cip)})
+                LAST_CIP = cip
+        else:
+            LAST_CIP = -1
+    except Exception:
+        pass
+
 
 # ── Core Operations ───────────────────────────────────────────────────────
 
@@ -303,7 +322,27 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
 
+    def _check_auth(self):
+        try:
+            home = os.path.expanduser("~")
+            token_file = os.path.join(home, ".nexusre", "auth_token")
+            if not os.path.exists(token_file):
+                return True # Fail-open if no token deployed yet
+            with open(token_file, "r") as f:
+                expected = f.read().strip()
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer ") or auth_header[7:] != expected:
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error": "Unauthorized"}')
+                return False
+            return True
+        except Exception:
+            return True
+
+
     def do_POST(self):
+        if not self._check_auth(): return
         # Python 2/3 compatible Content-Length reading
         try:
             cl = self.headers.get('Content-Length', '0')
@@ -341,8 +380,12 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 cnt = args.get("count", 32)
                 result = {"code": x64dbgOperations.disassemble(args.get("address"), cnt)}
             elif action == "x64dbg_scan_aob":
-                addr = x64dbgOperations.scan_aob(args.get("pattern", ""))
-                result = {"address": addr}
+                pattern_str = args.get("pattern_str")
+                result = {"address": x64dbgOperations.scan_aob(pattern_str)}
+            elif action == "x64dbg_poll_events":
+                check_x64dbg_events()
+                result = {"events": list(EVENTS_QUEUE)}
+                del EVENTS_QUEUE[:]
             elif action == "x64dbg_read_memory":
                 data = x64dbgOperations.read_memory(args.get("address"), args.get("size", 256))
                 result = {"data": data}

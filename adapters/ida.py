@@ -18,11 +18,7 @@ class IDAAdapter(BaseAdapter):
         self._cache = {}
         self._session = None
 
-    async def _get_session(self):
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(timeout=timeout)
-        return self._session
+
 
     async def _call(self, action: str, args: dict = None) -> dict:
         """Issue a JSON POST to the background HTTP server with Retry + Caching."""
@@ -97,6 +93,10 @@ class IDAAdapter(BaseAdapter):
     async def decompile_function(self, address: str) -> Optional[str]:
         res = await self._call("decompile", {"address": address})
         return res.get("code")
+
+    async def batch_decompile(self, addresses: List[str]) -> List[Optional[str]]:
+        res = await self._call("batch_decompile", {"addresses": addresses})
+        return res.get("codes", [])
 
     async def scan_aob(self, pattern: str) -> Optional[str]:
         res = await self._call("scan_aob", {"pattern": pattern})
@@ -276,3 +276,15 @@ class IDAAdapter(BaseAdapter):
         """Get all memory segments mapped in IDA database."""
         res = await self._call("memory_regions")
         return res.get("regions", [])
+
+    async def poll_events(self) -> list[dict]:
+        res = await self._call("poll_events")
+        if res and "events" in res:
+            return res["events"]
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        res = await self._call("scan_aob", {"pattern": pattern})
+        if res and "address" in res and res["address"]:
+            return [int(res["address"], 16)]
+        return []

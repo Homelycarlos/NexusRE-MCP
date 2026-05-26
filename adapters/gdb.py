@@ -91,3 +91,9 @@ class GDBAdapter(BaseAdapter):
     async def rename_local_variable(self, address: str, old_name: str, new_name: str) -> bool: return False
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool: return False
     async def save_binary(self, output_path: str) -> bool: return False
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []

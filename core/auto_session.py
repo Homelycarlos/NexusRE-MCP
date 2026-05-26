@@ -97,14 +97,26 @@ def auto_create_sessions(session_manager, host: str = "127.0.0.1") -> list[dict]
     return created
 
 
+def check_session_health(session_manager, host: str = "127.0.0.1"):
+    """Check health of existing auto sessions and clean up dead ones."""
+    for state in session_manager.list_sessions():
+        sid = state["session_id"]
+        if sid.startswith("auto_"):
+            backend = state["backend"]
+            port = DEFAULT_BACKENDS.get(backend, {}).get("port")
+            if port and not probe_port(host, port, timeout=1.0):
+                logger.info(f"[Auto-Session] Session {sid} dead, removing.")
+                session_manager.delete_session(sid)
+
 def start_background_probe(session_manager, interval: int = 30):
     """Start a background thread that periodically probes for new backends."""
     def _probe_loop():
         while True:
             try:
+                check_session_health(session_manager)
                 auto_create_sessions(session_manager)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[Auto-Session] Probe loop error: {e}")
             time.sleep(interval)
 
     thread = threading.Thread(target=_probe_loop, daemon=True, name="NexusRE-AutoSession")

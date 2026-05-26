@@ -6,7 +6,28 @@ import ida_nalt
 import ida_entry
 import json
 import threading
+import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+EVENTS_QUEUE = []
+LAST_EIP = -1
+
+def check_ida_events():
+    global LAST_EIP
+    try:
+        import ida_dbg
+        state = ida_dbg.get_process_state()
+        if state == ida_dbg.DSTATE_SUSP:
+            # Paused
+            eip = ida_dbg.get_ip_val()
+            if eip != LAST_EIP and eip != idaapi.BADADDR:
+                EVENTS_QUEUE.append({"type": "breakpoint", "address": hex(eip)})
+                LAST_EIP = eip
+        else:
+            LAST_EIP = -1
+    except Exception:
+        pass
 
 
 class IdaOperations:
@@ -110,6 +131,13 @@ class IdaOperations:
             return "Decompilation failed"
         except Exception as e:
             return f"Decompilation error: {e}"
+
+    @staticmethod
+    def batch_decompile(addresses):
+        results = []
+        for addr in addresses:
+            results.append(IdaOperations.decompile(addr))
+        return results
 
     @staticmethod
     def disassemble(address):
@@ -968,7 +996,27 @@ class IdaOperations:
 
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
+
+    def _check_auth(self):
+        import pathlib
+        try:
+            token_file = pathlib.Path.home() / ".nexusre" / "auth_token"
+            if not token_file.exists():
+                return True # Fail-open if no token deployed yet
+            with open(token_file, "r") as f:
+                expected = f.read().strip()
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer ") or auth_header[7:] != expected:
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error": "Unauthorized"}')
+                return False
+            return True
+        except Exception:
+            return True
+
     def do_GET(self):
+        if not self._check_auth(): return
         """Health-check endpoint."""
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -984,6 +1032,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
+        if not self._check_auth(): return
         content_length = int(self.headers.get("Content-Length", 0))
         post_data = self.rfile.read(content_length)
         if not post_data:
@@ -1160,6 +1209,10 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                         IdaOperations.scan_aob, args.get("pattern")
                     )
                 }
+            elif action == "poll_events":
+                IdaOperations._execute_sync(check_ida_events)
+                result = {"events": list(EVENTS_QUEUE)}
+                del EVENTS_QUEUE[:]
             elif action == "read_memory":
                 result = {
                     "hex_bytes": IdaOperations._execute_sync(
@@ -1310,344 +1363,20 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             seg = idc.get_next_seg(seg)
         return regions
 
-class MCPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        """Health-check endpoint."""
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        try:
-            binary = idaapi.get_input_file_path()
-            status = "ok" if binary else "no_binary"
-        except Exception:
-            status = "stale"
-            binary = ""
-        self.wfile.write(
-            json.dumps({"status": status, "binary": binary or ""}).encode("utf-8")
-        )
+PORT = 10101
+SERVER_INSTANCE = None
 
-    def do_POST(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        post_data = self.rfile.read(content_length)
-        if not post_data:
-            self.send_response(400)
-            self.end_headers()
-            return
-
-        try:
-            req = json.loads(post_data.decode("utf-8"))
-            action = req.get("action")
-            args = req.get("args", {})
-
-            result = None
-
-            # ── Core Navigation ───────────────────────────────────────
-            if action == "ping":
-                result = {"status": "ok"}
-            elif action == "get_current_address":
-                result = {
-                    "address": IdaOperations._execute_sync(
-                        IdaOperations.get_current_address
-                    )
-                }
-            elif action == "get_current_function":
-                result = {
-                    "address": IdaOperations._execute_sync(
-                        IdaOperations.get_current_function
-                    )
-                }
-            elif action == "get_functions":
-                result = {
-                    "functions": IdaOperations._execute_sync(
-                        IdaOperations.get_functions,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                        args.get("filter"),
-                    )
-                }
-            elif action == "get_function":
-                result = IdaOperations._execute_sync(
-                    IdaOperations.get_function, args.get("address")
-                )
-                if result is None:
-                    result = {"error": "No function found at address"}
-
-            # ── Decompilation & Disassembly ────────────────────────────
-            elif action == "decompile":
-                result = {
-                    "code": IdaOperations._execute_sync(
-                        IdaOperations.decompile, args.get("address")
-                    )
-                }
-            elif action == "disassemble":
-                result = {
-                    "code": IdaOperations._execute_sync(
-                        IdaOperations.disassemble, args.get("address")
-                    )
-                }
-            elif action == "extract_microcode":
-                result = {
-                    "microcode": IdaOperations._execute_sync(
-                        IdaOperations.extract_microcode, args.get("address")
-                    )
-                }
-            elif action == "get_complexity":
-                result = IdaOperations._execute_sync(
-                    IdaOperations.get_complexity, args.get("address")
-                )
-            elif action == "guess_struct":
-                result = {
-                    "struct": IdaOperations._execute_sync(
-                        IdaOperations.guess_struct, args.get("address")
-                    )
-                }
-
-            # ── Cross-References ───────────────────────────────────────
-            elif action == "get_xrefs":
-                result = {
-                    "xrefs": IdaOperations._execute_sync(
-                        IdaOperations.get_xrefs, args.get("address")
-                    )
-                }
-
-            # ── Modification ───────────────────────────────────────────
-            elif action == "rename":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.rename, args.get("address"), args.get("name")
-                    )
-                }
-            elif action == "set_comment":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.set_comment,
-                        args.get("address"),
-                        args.get("comment"),
-                        args.get("repeatable", False),
-                    )
-                }
-            elif action == "set_function_type":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.set_function_type,
-                        args.get("address"),
-                        args.get("signature"),
-                    )
-                }
-            elif action == "rename_local_variable":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.rename_local_variable,
-                        args.get("address"),
-                        args.get("old_name"),
-                        args.get("new_name"),
-                    )
-                }
-            elif action == "set_local_variable_type":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.set_local_variable_type,
-                        args.get("address"),
-                        args.get("variable_name"),
-                        args.get("new_type"),
-                    )
-                }
-            elif action == "patch_bytes":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.patch_bytes,
-                        args.get("address"),
-                        args.get("hex_bytes"),
-                    )
-                }
-            elif action == "save_binary":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.save_binary, args.get("output_path")
-                    )
-                }
-
-            # ── Data Extraction ────────────────────────────────────────
-            elif action == "get_strings":
-                result = {
-                    "strings": IdaOperations._execute_sync(
-                        IdaOperations.get_strings,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                        args.get("filter"),
-                    )
-                }
-            elif action == "get_globals":
-                result = {
-                    "globals": IdaOperations._execute_sync(
-                        IdaOperations.get_globals,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                        args.get("filter"),
-                    )
-                }
-            elif action == "get_segments":
-                result = {
-                    "segments": IdaOperations._execute_sync(
-                        IdaOperations.get_segments,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                    )
-                }
-            elif action == "get_imports":
-                result = {
-                    "imports": IdaOperations._execute_sync(
-                        IdaOperations.get_imports,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                    )
-                }
-            elif action == "get_exports":
-                result = {
-                    "exports": IdaOperations._execute_sync(
-                        IdaOperations.get_exports,
-                        args.get("offset", 0),
-                        args.get("limit", 100),
-                    )
-                }
-            elif action == "analyze_functions":
-                # Re-analyze specified addresses
-                result = {"success": True}
-            elif action == "scan_aob":
-                result = {
-                    "address": IdaOperations._execute_sync(
-                        IdaOperations.scan_aob, args.get("pattern")
-                    )
-                }
-            elif action == "read_memory":
-                result = {
-                    "hex_bytes": IdaOperations._execute_sync(
-                        IdaOperations.read_memory, args.get("address"), args.get("size")
-                    )
-                }
-            elif action == "set_bpt":
-                result = IdaOperations._execute_sync(
-                    IdaOperations.set_bpt, args.get("address")
-                )
-            elif action == "wait_bpt":
-                result = IdaOperations._execute_sync(
-                    IdaOperations.wait_bpt, args.get("timeout", 15)
-                )
-            elif action == "memory_regions":
-                result = IdaOperations._execute_sync(IdaOperations.memory_regions)
-            elif action == "get_stack_frame_variables":
-                result = {
-                    "variables": IdaOperations._execute_sync(
-                        IdaOperations.get_stack_frame_variables, args.get("address")
-                    )
-                }
-            elif action == "list_local_types":
-                result = {
-                    "types": IdaOperations._execute_sync(IdaOperations.list_local_types)
-                }
-            elif action == "get_defined_structures":
-                result = {
-                    "structures": IdaOperations._execute_sync(
-                        IdaOperations.get_defined_structures
-                    )
-                }
-            elif action == "analyze_struct_detailed":
-                result = {
-                    "structure": IdaOperations._execute_sync(
-                        IdaOperations.analyze_struct_detailed, args.get("name")
-                    )
-                }
-            elif action == "declare_c_type":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.declare_c_type, args.get("c_declaration")
-                    )
-                }
-            elif action == "set_global_variable_type":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.set_global_variable_type,
-                        args.get("variable_name"),
-                        args.get("new_type"),
-                    )
-                }
-            elif action == "get_callees":
-                result = {
-                    "callees": IdaOperations._execute_sync(
-                        IdaOperations.get_callees, args.get("address")
-                    )
-                }
-            elif action == "get_callers":
-                result = {
-                    "callers": IdaOperations._execute_sync(
-                        IdaOperations.get_callers, args.get("address")
-                    )
-                }
-            elif action == "get_xrefs_to_field":
-                result = {
-                    "xrefs": IdaOperations._execute_sync(
-                        IdaOperations.get_xrefs_to_field,
-                        args.get("struct_name"),
-                        args.get("field_name"),
-                    )
-                }
-            elif action == "patch_address_assembles":
-                result = {
-                    "success": IdaOperations._execute_sync_write(
-                        IdaOperations.patch_address_assembles,
-                        args.get("address"),
-                        args.get("instructions"),
-                    )
-                }
-            elif action == "execute_script":
-                result = IdaOperations._execute_sync(
-                    IdaOperations.execute_script, args.get("code", "")
-                )
-            else:
-                result = {"error": f"Unknown action group or action: {action}"}
-
-            print(
-                "[IDA-MCP] %s -> %s"
-                % (
-                    action,
-                    "ok" if result and "error" not in str(result)[:50] else "err",
-                )
-            )
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode("utf-8"))
-
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-
-    def log_message(self, format, *args):
-        # Suppress noisy logging to IDA output window
-        pass
-
-
-from http.server import ThreadingHTTPServer
-
-# Global references to keep server alive and allow shutting down
-if "SERVER_INSTANCE" in dir() and SERVER_INSTANCE is not None:
-    print("[IDA-MCP] Shutting down previous server instance...")
-    try:
-        SERVER_INSTANCE.shutdown()
-        SERVER_INSTANCE.server_close()
-    except Exception:
-        pass
-
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 def start_server():
     global SERVER_INSTANCE
-    PORT = 10101
-    SERVER_INSTANCE = ThreadingHTTPServer(("127.0.0.1", PORT), MCPRequestHandler)
-    print(f"[IDA-MCP] Starting threaded background HTTP server on 127.0.0.1:{PORT} ...")
-    SERVER_INSTANCE.serve_forever()
-
+    try:
+        SERVER_INSTANCE = ThreadingHTTPServer(('127.0.0.1', PORT), MCPRequestHandler)
+        print("[IDA-MCP] Server started on port %d" % PORT)
+        SERVER_INSTANCE.serve_forever()
+    except Exception as e:
+        print("[IDA-MCP] Failed to start server: %s" % str(e))
 
 class IDA_MCP_Plugin(idaapi.plugin_t):
     # PLUGIN_FIX tells IDA to load this automatically when it boots up

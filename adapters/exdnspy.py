@@ -199,3 +199,9 @@ class ExdnspyAdapter(BaseAdapter):
         if as_bytes:
             return bytes.fromhex(hex_data.replace(" ", ""))
         return hex_data
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []

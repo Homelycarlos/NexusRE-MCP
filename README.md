@@ -38,7 +38,7 @@ Our custom installer automatically downloads its own sandboxed Python toolchain 
 Double-click **`inject_mcp_configs.bat`**. It will automatically request Administrator privileges and then:
 
 1.  **Download & install** the `uv` package manager and a sandboxed Python 3.12 if you don't already have them.
-2.  **Scan your system** for installed reverse engineering tools (IDA Pro, Ghidra, x64dbg, Binary Ninja, Cheat Engine).
+2.  **Scan your system** for installed reverse engineering tools (IDA Pro, Ghidra, x64dbg, Binary Ninja, Cheat Engine, dnSpy).
 3.  **Install backend plugins** directly into each tool it finds.
 4.  **Inject MCP configuration** into all detected AI coding assistants — **Claude Desktop**, **Cursor**, **Windsurf**, **Kiro IDE**, **Trae IDE**, **Zed IDE**, **Roo Code**, **Cline**, **Claude Code**, and **LM Studio**.
 5.  **Auto-fix IDA Pro Python bindings** by running `idapyswitch.exe` if IDA is detected, so you never have to deal with "Python not found" errors.
@@ -89,6 +89,7 @@ NexusRE connects to backend plugins in the `plugins/` folder. Right now, it supp
 | **x64dbg** | `10103` | Live debugging |
 | **Binary Ninja** | `10104` | Static analysis |
 | **Cheat Engine** | `10105` | Live memory editing |
+| **dnSpy / exdnSpy** | `10106` | .NET Decompiling & Debugging |
 | **Frida** | Headless | Dynamic instrumentation |
 | **Radare2** | Headless | CLI analysis |
 | **Kernel Drivers / DMA** | Headless | Anti-cheat bypass (EAC/BE) |
@@ -145,6 +146,10 @@ If you need to install them manually, here is how to set up each one from the `p
 1. Copy `plugins/ce/ce_backend_plugin.lua` into your Cheat Engine `autorun` folder (e.g. `C:\Program Files\Cheat Engine 7.5\autorun\`).
 2. Restart Cheat Engine. The plugin starts automatically — **no Python needed!**
 
+### 🕵️ dnSpy / exdnspy
+1. Copy `plugins/exdnspy/bin/Release/net9.0/NexusRE.Exdnspy.dll` into your dnSpy directory (next to `dnSpy.exe`).
+2. Restart dnSpy. The extension loads and starts the backend server on port `10106` automatically.
+
 > **💡 Tip:** If you can't get IDA or Ghidra working, Cheat Engine is a great alternative that works out of the box with zero dependencies.
 
 ---
@@ -183,3 +188,12 @@ Once installed, open your AI coding assistant and try these commands:
 <div align="center">
 <i>Built to make game hacking human-readable.</i>
 </div>
+
+
+## ⚔️ Offensive Exploitation Module
+
+NexusRE-MCP now goes beyond passive analysis and provides advanced, automated exploitation primitives through the `exploitation_tools` and `execute_pipeline` routers:
+- **Automated Shellcode Injection** (CreateRemoteThread, APC, etc.)
+- **Kernel Driver Scaffold Generation** (WDM with `MmCopyMemory` and CR3 manipulation)
+- **VMT / IAT Detour Hooks Generation** (Auto-generates MinHook C++ templates)
+- **Weaponized ROP Chain Generators**

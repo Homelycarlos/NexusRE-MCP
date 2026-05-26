@@ -175,3 +175,15 @@ class X64DbgAdapter(BaseAdapter):
 
     async def save_binary(self, output_path: str) -> bool:
         raise NotImplementedError("Saving patched binaries is generally done via UI / Scylla in x64dbg. Not natively supported here via simple plugin API.")
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        res = await self._call("x64dbg_scan_aob", {"pattern_str": pattern})
+        if res and "address" in res and res["address"]:
+            return [int(res["address"], 16)]
+        return []
+
+    async def poll_events(self) -> list[dict]:
+        res = await self._call("x64dbg_poll_events")
+        if res and "events" in res:
+            return res["events"]
+        return []

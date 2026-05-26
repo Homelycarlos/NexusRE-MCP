@@ -8,3 +8,5 @@ scratch_*.py
 dist/
 build/
 .venv/
+obj/
+bin/

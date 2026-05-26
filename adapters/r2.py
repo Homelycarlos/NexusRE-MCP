@@ -212,3 +212,9 @@ class Radare2Adapter(BaseAdapter):
     async def save_binary(self, output_path: str) -> bool:
         self.r2.cmd('w') # Just write to disk if R2 was opened in write mode (-w)
         return True
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []

@@ -317,7 +317,27 @@ class BinjaOperations:
 
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
+
+    def _check_auth(self):
+        import pathlib
+        try:
+            token_file = pathlib.Path.home() / ".nexusre" / "auth_token"
+            if not token_file.exists():
+                return True # Fail-open if no token deployed yet
+            with open(token_file, "r") as f:
+                expected = f.read().strip()
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer ") or auth_header[7:] != expected:
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b'{"error": "Unauthorized"}')
+                return False
+            return True
+        except Exception:
+            return True
+
     def do_POST(self):
+        if not self._check_auth(): return
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         if not post_data:

@@ -101,10 +101,37 @@ namespace NexusRE.Exdnspy
         }
 
         // ── Request dispatcher ───────────────────────────────────────────
+        private static bool CheckAuth(HttpListenerContext ctx)
+        {
+            try
+            {
+                string tokenPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nexusre", "auth_token");
+                if (!File.Exists(tokenPath)) return true;
+                string expected = File.ReadAllText(tokenPath).Trim();
+                string authHeader = ctx.Request.Headers["Authorization"];
+                if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ") || authHeader.Substring(7) != expected)
+                {
+                    return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
         private static void HandleRequest(HttpListenerContext ctx)
         {
             try
             {
+                if (!CheckAuth(ctx))
+                {
+                    ctx.Response.StatusCode = 401;
+                    Reply(ctx, new RpcResponse { Error = "Unauthorized" });
+                    return;
+                }
+
                 // GET = health check
                 if (ctx.Request.HttpMethod == "GET")
                 {

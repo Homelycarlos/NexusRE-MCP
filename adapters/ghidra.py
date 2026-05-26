@@ -18,11 +18,7 @@ class GhidraAdapter(BaseAdapter):
         self._cache = {}
         self._session = None
 
-    async def _get_session(self):
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(timeout=timeout)
-        return self._session
+
 
     async def _call(self, action: str, args: dict = None) -> dict:
         import asyncio
@@ -215,3 +211,15 @@ class GhidraAdapter(BaseAdapter):
         res = await self._call("ghidra_scan_aob", {"pattern": pattern})
         return res.get("address")
 
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        res = await self._call("ghidra_scan_aob", {"pattern": pattern})
+        if res and "address" in res and res["address"]:
+            return [int(res["address"], 16)]
+        return []
+
+    async def poll_events(self) -> list[dict]:
+        res = await self._call("ghidra_poll_events")
+        if res and "events" in res:
+            return res["events"]
+        return []

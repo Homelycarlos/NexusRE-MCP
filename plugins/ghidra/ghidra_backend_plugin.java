@@ -64,8 +64,28 @@ public class ghidra_backend_plugin extends GhidraScript {
     static class MCPHandler implements HttpHandler {
         private Gson gson = new GsonBuilder().serializeNulls().create();
 
+        private boolean checkAuth(HttpExchange exchange) {
+            try {
+                String userHome = System.getProperty("user.home");
+                java.io.File tokenFile = new java.io.File(userHome + "/.nexusre/auth_token");
+                if (!tokenFile.exists()) return true;
+                String expected = new String(java.nio.file.Files.readAllBytes(tokenFile.toPath())).trim();
+                String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+                if (authHeader == null || !authHeader.startsWith("Bearer ") || !authHeader.substring(7).equals(expected)) {
+                    return false;
+                }
+                return true;
+            } catch (Exception e) {
+                return true;
+            }
+        }
+
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            if (!checkAuth(exchange)) {
+                sendJson(exchange, 401, errorJson("Unauthorized"));
+                return;
+            }
             String method = exchange.getRequestMethod();
 
             if ("GET".equalsIgnoreCase(method)) {
@@ -447,6 +467,12 @@ public class ghidra_backend_plugin extends GhidraScript {
                     return r;
                 }
 
+                case "ghidra_poll_events": {
+                    JsonObject r = new JsonObject();
+                    JsonArray evs = new JsonArray();
+                    r.add("events", evs);
+                    return r.toString();
+                }
                 case "ghidra_scan_aob": {
                     String pattern = getStr(args, "pattern", "");
                     if (pattern.isEmpty()) return errorJson("Pattern required");

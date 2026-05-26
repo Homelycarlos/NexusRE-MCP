@@ -113,6 +113,9 @@ class GhidraRequestHandler(BaseHTTPRequestHandler):
         # ── Ping / Health ──────────────────────────────────────────────
         if action == "ping":
             return {"status": "ok", "program": prog.getName()}
+            
+        elif action == "poll_events":
+            return {"events": []}
 
         # ── Current Address ────────────────────────────────────────────
         elif action == "ghidra_get_current_address":
@@ -654,7 +657,7 @@ class GhidraRequestHandler(BaseHTTPRequestHandler):
 def _health_watchdog():
     """Background thread that checks if the program reference is still valid."""
     while True:
-        time.sleep(10)
+        time.sleep(1)
         prog = GhidraRequestHandler._program
         if prog is not None:
             try:

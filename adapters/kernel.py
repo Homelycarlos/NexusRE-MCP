@@ -190,3 +190,9 @@ class KernelAdapter(BaseAdapter):
     async def set_local_variable_type(self, address: str, variable_name: str, new_type: str) -> bool: return False
     async def save_binary(self, output_path: str) -> bool: return False
     async def disassemble_at(self, address: str) -> List[InstructionSchema]: return []
+
+    async def poll_events(self) -> list[dict]:
+        return []
+
+    async def pattern_scan(self, pattern: str) -> list[int]:
+        return []
