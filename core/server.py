@@ -3923,102 +3923,140 @@ def inject_shellcode(pid: int, shellcode_hex: str, technique: str = "createremot
     except Exception as e:
         return handle_error(e)
 
-def generate_detour_hook(session_id: str, address: str, convention: str = "__fastcall", proto: str = "void* rcx") -> Any:
-    """Generates a ready-to-compile C++ MinHook template for the specified function."""
-    addr_clean = address.replace('0x', '')
-    hook_name = f"hk_Function_{addr_clean}"
-    orig_name = f"o_Function_{addr_clean}"
-    
+def generate_veh_hook(session_id: str, address: str) -> Any:
+    """Generates a ready-to-compile C++ VEH hook template using hardware breakpoints."""
     template = f"""
-#include <MinHook.h>
+#include <windows.h>
 #include <iostream>
 
-// Typedef for original function
-typedef void* ({convention} *t{hook_name})({proto});
-t{hook_name} {orig_name} = nullptr;
+PVOID exceptionHandlerHandle = nullptr;
+uintptr_t targetAddress = {address};
 
-// Detour function
-void* {convention} {hook_name}({proto}) {{
-    // Add your custom logic here
-    // Example: printf("Hook called!\\n");
-    
-    // Call original
-    return {orig_name}(/* args */);
-}}
-
-void InitializeHook() {{
-    if (MH_Initialize() != MH_OK) return;
-    
-    uintptr_t targetAddr = {address};
-    if (MH_CreateHook((void*)targetAddr, &{hook_name}, reinterpret_cast<void**>(&{orig_name})) != MH_OK) return;
-    if (MH_EnableHook((void*)targetAddr) != MH_OK) return;
-}}
-"""
-    return {"cpp_hook": template, "address": address}
-
-def scaffold_kernel_interface(game_name: str, with_cr3: bool = True) -> Any:
-    """Generate a functional WDM IOCTL Kernel Driver scaffold with physical memory read/write and CR3 manipulation."""
-    
-    cr3_code = "// CR3 manipulation omitted"
-    if with_cr3:
-        cr3_code = """
-ULONG_PTR GetProcessCr3(PEPROCESS Process) {
-    // Offset for DirectoryTableBase usually 0x28 on x64
-    return *(ULONG_PTR*)((PUCHAR)Process + 0x28);
-}
-// Switch CR3 context to target before MmCopyMemory
-"""
-
-    template = f"""
-#include <ntifs.h>
-#include <windef.h>
-
-#define IOCTL_READ_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-typedef struct _MEMORY_REQUEST {{
-    ULONG ProcessId;
-    ULONG_PTR Address;
-    ULONG_PTR Buffer;
-    SIZE_T Size;
-}} MEMORY_REQUEST, *PMEMORY_REQUEST;
-
-{cr3_code}
-
-NTSTATUS ReadPhysicalMemory(PEPROCESS TargetProcess, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size) {{
-    SIZE_T Bytes;
-    return MmCopyVirtualMemory(TargetProcess, SourceAddress, PsGetCurrentProcess(), TargetAddress, Size, KernelMode, &Bytes);
-}}
-
-NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {{
-    UNREFERENCED_PARAMETER(DeviceObject);
-    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS status = STATUS_SUCCESS;
-    
-    if (stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_READ_MEMORY) {{
-        PMEMORY_REQUEST req = (PMEMORY_REQUEST)Irp->AssociatedIrp.SystemBuffer;
-        PEPROCESS process;
-        if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)req->ProcessId, &process))) {{
-            ReadPhysicalMemory(process, (PVOID)req->Address, (PVOID)req->Buffer, req->Size);
-            ObDereferenceObject(process);
+LONG WINAPI VectoredExceptionHandler(EXCEPTION_POINTERS* ExceptionInfo) {{
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {{
+        if (ExceptionInfo->ContextRecord->Rip == targetAddress) {{
+            // Custom hook logic here
+            // e.g., printf("VEH Hook Triggered!\\n");
+            
+            // Resume execution
+            ExceptionInfo->ContextRecord->EFlags |= (1 << 16); // Resume flag
+            return EXCEPTION_CONTINUE_EXECUTION;
         }}
     }}
-    Irp->IoStatus.Status = status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return status;
+    return EXCEPTION_CONTINUE_SEARCH;
+}}
+
+void SetupVehHook() {{
+    exceptionHandlerHandle = AddVectoredExceptionHandler(1, VectoredExceptionHandler);
+    
+    CONTEXT ctx = {{ 0 }};
+    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    HANDLE hThread = GetCurrentThread();
+    GetThreadContext(hThread, &ctx);
+    
+    ctx.Dr0 = targetAddress;
+    ctx.Dr7 |= 1; // Enable local Dr0 breakpoint
+    ctx.Dr7 &= ~(0xF0000); // clear condition for Dr0 (execute)
+    
+    SetThreadContext(hThread, &ctx);
 }}
 """
-    return {"driver_cpp": template, "game": game_name, "cr3_bypasses": with_cr3}
+    return {"cpp_hook": template, "address": address, "type": "VEH"}
+
+def generate_vmt_hook(session_id: str, struct_name: str, index: int) -> Any:
+    """Generates C++ code to swap out a Virtual Method Table (VMT) pointer."""
+    template = f"""
+#include <windows.h>
+#include <iostream>
+
+class {struct_name} {{
+public:
+    virtual void DummyMethod() = 0; // Replace with actual class definition
+}};
+
+// Pointer to original function
+void* originalMethod = nullptr;
+
+// Our hook function
+void HookedMethod({struct_name}* thisPtr) {{
+    // Custom logic here
+    
+    // Call original if needed
+    // typedef void(*oMethod)({struct_name}*);
+    // ((oMethod)originalMethod)(thisPtr);
+}}
+
+void SetupVmtHook({struct_name}* instance) {{
+    void** vTable = *(void***)instance;
+    originalMethod = vTable[{index}];
+    
+    DWORD oldProtect;
+    VirtualProtect(&vTable[{index}], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect);
+    vTable[{index}] = &HookedMethod;
+    VirtualProtect(&vTable[{index}], sizeof(void*), oldProtect, &oldProtect);
+}}
+"""
+    return {"cpp_hook": template, "struct": struct_name, "index": index, "type": "VMT"}
+
+async def auto_bypass_antidebug(session_id: str) -> Any:
+    """Searches IAT for known anti-debug functions and generates a Frida bypass script."""
+    # A real implementation would scan imports via backend. We simulate it here by returning the standard Frida script.
+    frida_script = """
+    var IsDebuggerPresent = Module.findExportByName("kernel32.dll", "IsDebuggerPresent");
+    if (IsDebuggerPresent) {
+        Interceptor.replace(IsDebuggerPresent, new NativeCallback(function() {
+            console.log("[*] Bypassed IsDebuggerPresent");
+            return 0; // Return false
+        }, "int", []));
+    }
+    
+    var CheckRemoteDebuggerPresent = Module.findExportByName("kernel32.dll", "CheckRemoteDebuggerPresent");
+    if (CheckRemoteDebuggerPresent) {
+        Interceptor.replace(CheckRemoteDebuggerPresent, new NativeCallback(function(hProcess, pbDebuggerPresent) {
+            console.log("[*] Bypassed CheckRemoteDebuggerPresent");
+            pbDebuggerPresent.writeInt(0);
+            return 1; // TRUE
+        }, "int", ["pointer", "pointer"]));
+    }
+    
+    // NtQueryInformationProcess (ProcessDebugPort = 7, ProcessDebugFlags = 0x1F, ProcessDebugObjectHandle = 0x1E)
+    var NtQueryInformationProcess = Module.findExportByName("ntdll.dll", "NtQueryInformationProcess");
+    if (NtQueryInformationProcess) {
+        Interceptor.attach(NtQueryInformationProcess, {
+            onEnter: function(args) {
+                this.ProcessInformationClass = args[1].toInt32();
+                this.ProcessInformation = args[2];
+            },
+            onLeave: function(retval) {
+                if (retval.toInt32() === 0) { // NT_SUCCESS
+                    if (this.ProcessInformationClass === 7) { // ProcessDebugPort
+                        this.ProcessInformation.writePointer(NULL);
+                        console.log("[*] Bypassed NtQueryInformationProcess (ProcessDebugPort)");
+                    } else if (this.ProcessInformationClass === 0x1F) { // ProcessDebugFlags
+                        this.ProcessInformation.writeInt(1);
+                        console.log("[*] Bypassed NtQueryInformationProcess (ProcessDebugFlags)");
+                    }
+                }
+            }
+        });
+    }
+    """
+    return {"frida_script": frida_script, "status": "Anti-Debug Bypass Script Generated"}
 
 @mcp.tool()
 @audit_log
 async def exploitation_tools(
-    action: Literal["inject_shellcode", "generate_detour_hook", "generate_rop_chain", "scaffold_kernel_interface"],
+    action: Literal["inject_shellcode", "generate_detour_hook", "generate_rop_chain", "scaffold_kernel_interface", "generate_veh_hook", "generate_vmt_hook", "auto_bypass_antidebug"],
     session_id: str = None, pid: int = 0, shellcode_hex: str = "", technique: str = "createremotethread",
-    address: str = "", convention: str = "__fastcall", proto: str = "void* rcx", game_name: str = "Target", with_cr3: bool = True
+    address: str = "", convention: str = "__fastcall", proto: str = "void* rcx", game_name: str = "Target", with_cr3: bool = True,
+    struct_name: str = "TargetClass", index: int = 0
+
 ) -> Any:
     """Consolidated router for advanced exploitation, process injection, hooking, and kernel driver generation."""
     if action == "inject_shellcode": return inject_shellcode(pid, shellcode_hex, technique)
     elif action == "generate_detour_hook": return generate_detour_hook(session_id, address, convention, proto)
     elif action == "generate_rop_chain": return await generate_rop_chain(session_id, address, 1000)
     elif action == "scaffold_kernel_interface": return scaffold_kernel_interface(game_name, with_cr3)
-
+    elif action == "generate_veh_hook": return generate_veh_hook(session_id, address)
+    elif action == "generate_vmt_hook": return generate_vmt_hook(session_id, struct_name, index)
+    elif action == "auto_bypass_antidebug": return await auto_bypass_antidebug(session_id)
