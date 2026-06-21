@@ -39,6 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 all = [
+    "frida>=16.0.0",
     "frida-tools>=12.0.0",
     "r2pipe>=1.5.0",
     "pymem>=1.13.0",
@@ -47,6 +48,8 @@ all = [
     "capstone>=5.0.0",
     "unicorn>=2.0.1",
     "PyGithub>=2.1.1",
+    "psutil>=5.9.0",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.urls]

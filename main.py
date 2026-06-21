@@ -1,13 +1,20 @@
 import os
 import sys
 import json
+import logging
 import platform
+import threading
 
 # Ensure the root directory is accessible so modules resolve correctly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.server import mcp
 from core.setup_scanner import deep_scan_for_re_tools, do_install_plugins
+
+logger = logging.getLogger("NexusRE")
+
+# Global flag set by background updater
+_update_available = False
 
 
 def get_config_json() -> dict:
@@ -349,82 +356,155 @@ Supported Backends:
 
 
 def auto_update_silent():
-    """Silently check for and apply updates once every 24 hours."""
+    """Silently check for and apply updates once every 24 hours.
+
+    Runs in a background daemon thread so it never blocks MCP stdio startup.
+    If an update is applied, sets ``_update_available`` and logs a message
+    instead of calling ``os.execl`` (which would kill the stdio transport).
+    ZIP-path updates use an atomic download-verify-backup-swap strategy.
+    """
+    global _update_available
     try:
         import subprocess, time, shutil, tempfile, urllib.request, zipfile
         root_dir = os.path.dirname(os.path.abspath(__file__))
         last_update_file = os.path.join(root_dir, ".last_update")
-        
+
         now = time.time()
         if os.path.exists(last_update_file):
             with open(last_update_file, "r") as f:
                 try:
-                    if now - float(f.read().strip()) < 86400: return
-                except ValueError: pass
-                    
+                    if now - float(f.read().strip()) < 86400:
+                        return
+                except ValueError:
+                    pass
+
         git_dir = os.path.join(root_dir, ".git")
         did_update = False
 
         if os.path.exists(git_dir):
+            # ---- git-based update path (no change needed) ----
             subprocess.run(["git", "fetch"], capture_output=True, check=False, cwd=root_dir)
-            status = subprocess.run(["git", "status", "-uno"], capture_output=True, text=True, check=False, cwd=root_dir)
+            status = subprocess.run(
+                ["git", "status", "-uno"],
+                capture_output=True, text=True, check=False, cwd=root_dir,
+            )
             if "Your branch is behind" in status.stdout:
                 subprocess.run(["git", "pull"], capture_output=True, check=False, cwd=root_dir)
                 did_update = True
         else:
-            import json
-            req = urllib.request.Request("https://api.github.com/repos/Homelycarlos/NexusRE-MCP/commits/master")
+            # ---- ZIP-based update path — atomic with rollback ----
+            import json as _json
+            req = urllib.request.Request(
+                "https://api.github.com/repos/Homelycarlos/NexusRE-MCP/commits/master"
+            )
             req.add_header("User-Agent", "NexusRE-MCP-AutoUpdater")
             with urllib.request.urlopen(req, timeout=5) as response:
-                latest_sha = json.loads(response.read().decode())["sha"]
-            
+                latest_sha = _json.loads(response.read().decode())["sha"]
+
             version_file = os.path.join(root_dir, ".version")
             current_sha = ""
             if os.path.exists(version_file):
                 with open(version_file, "r") as f:
                     current_sha = f.read().strip()
-            
+
             if current_sha != latest_sha:
                 zip_url = "https://github.com/Homelycarlos/NexusRE-MCP/archive/refs/heads/master.zip"
                 with tempfile.TemporaryDirectory() as tmpdir:
                     zip_path = os.path.join(tmpdir, "update.zip")
                     urllib.request.urlretrieve(zip_url, zip_path)
-                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    with zipfile.ZipFile(zip_path, "r") as zip_ref:
                         zip_ref.extractall(tmpdir)
-                        
+
                     extracted_folder = os.path.join(tmpdir, "NexusRE-MCP-master")
-                    for src_dir, dirs, files in os.walk(extracted_folder):
-                        dst_dir = src_dir.replace(extracted_folder, root_dir, 1)
-                        if not os.path.exists(dst_dir): os.makedirs(dst_dir)
+
+                    # -- Verify download contains key files --
+                    required_files = ["main.py", os.path.join("core", "server.py")]
+                    for rf in required_files:
+                        if not os.path.exists(os.path.join(extracted_folder, rf)):
+                            logger.warning(
+                                f"Auto-update aborted: downloaded archive missing {rf}"
+                            )
+                            return
+
+                    # -- Create backup of current version --
+                    backup_dir = os.path.join(root_dir, ".backup")
+                    if os.path.exists(backup_dir):
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    os.makedirs(backup_dir, exist_ok=True)
+
+                    # Snapshot files that are about to be overwritten
+                    for src_dir, _dirs, files in os.walk(extracted_folder):
+                        rel = os.path.relpath(src_dir, extracted_folder)
+                        dst_cur = os.path.join(root_dir, rel)
+                        dst_bak = os.path.join(backup_dir, rel)
                         for file_ in files:
-                            shutil.copy2(os.path.join(src_dir, file_), os.path.join(dst_dir, file_))
-                            
-                with open(version_file, "w") as f: f.write(latest_sha)
+                            cur_file = os.path.join(dst_cur, file_)
+                            if os.path.exists(cur_file):
+                                os.makedirs(dst_bak, exist_ok=True)
+                                shutil.copy2(cur_file, os.path.join(dst_bak, file_))
+
+                    # -- Swap: copy new files over current install --
+                    try:
+                        for src_dir, _dirs, files in os.walk(extracted_folder):
+                            dst_dir = src_dir.replace(extracted_folder, root_dir, 1)
+                            if not os.path.exists(dst_dir):
+                                os.makedirs(dst_dir)
+                            for file_ in files:
+                                shutil.copy2(
+                                    os.path.join(src_dir, file_),
+                                    os.path.join(dst_dir, file_),
+                                )
+                    except Exception as swap_err:
+                        # -- Rollback from backup --
+                        logger.warning(f"Auto-update swap failed, rolling back: {swap_err}")
+                        for bak_dir, _dirs, files in os.walk(backup_dir):
+                            rel = os.path.relpath(bak_dir, backup_dir)
+                            restore_dir = os.path.join(root_dir, rel)
+                            for file_ in files:
+                                shutil.copy2(
+                                    os.path.join(bak_dir, file_),
+                                    os.path.join(restore_dir, file_),
+                                )
+                        return
+
+                with open(version_file, "w") as f:
+                    f.write(latest_sha)
                 did_update = True
 
-        with open(last_update_file, "w") as f: f.write(str(now))
+        with open(last_update_file, "w") as f:
+            f.write(str(now))
 
         if did_update:
-            uv_exe = os.path.join(root_dir, ".venv", "Scripts", "uv.exe") if platform.system() == "Windows" else os.path.join(root_dir, ".venv", "bin", "uv")
-            if os.path.exists(uv_exe): 
+            # Sync deps but do NOT restart — os.execl kills stdio transport.
+            uv_exe = (
+                os.path.join(root_dir, ".venv", "Scripts", "uv.exe")
+                if platform.system() == "Windows"
+                else os.path.join(root_dir, ".venv", "bin", "uv")
+            )
+            if os.path.exists(uv_exe):
                 subprocess.run([uv_exe, "sync"], capture_output=True, cwd=root_dir)
-            else: 
+            else:
                 try:
                     subprocess.run(["uv", "sync"], capture_output=True, cwd=root_dir, check=True)
                 except (subprocess.CalledProcessError, FileNotFoundError):
-                    import sys
-                    subprocess.run([sys.executable, "-m", "pip", "install", "uv"], capture_output=True)
-                    subprocess.run([sys.executable, "-m", "uv", "sync"], capture_output=True, cwd=root_dir)
-            import sys
-            os.execl(sys.executable, sys.executable, *sys.argv)
-            
-    except Exception:
-        pass
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "uv"], capture_output=True
+                    )
+                    subprocess.run(
+                        [sys.executable, "-m", "uv", "sync"],
+                        capture_output=True, cwd=root_dir,
+                    )
+            _update_available = True
+            logger.info("Update applied — restart the server to load new code.")
+
+    except Exception as e:
+        logger.warning(f"Auto-update failed: {e}")
 
 
 def main_cli():
-    # Attempt silent auto-update before starting the server
-    auto_update_silent()
+    # Launch auto-update in a background daemon thread — never blocks server startup
+    _update_thread = threading.Thread(target=auto_update_silent, daemon=True)
+    _update_thread.start()
 
     if "--help" in sys.argv or "-h" in sys.argv:
         print_help()
